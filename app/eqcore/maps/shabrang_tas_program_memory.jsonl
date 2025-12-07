@@ -1,0 +1,40 @@
+{"type":"meta","device":"TAS3251","schema":"simple-reg-v1","source":"example_configs/TAS3251/48khz_1.1.h","range":"lines 54-96","fields":["addr","value","comment"]}
+{"addr":"0x00","value":"0x00", "comment":"program memory"}
+{"addr":"0x7F","value":"0x00"}
+{"addr":"0x02","value":"0x11", "comment":"standby request + power down request"}
+{"addr":"0x01","value":"0x11", "comment":"reset module and reset register"}
+{"addr":"0x00","value":"0x00"}
+{"addr":"0x00","value":"0x00"}
+{"addr":"0x00","value":"0x00"}
+{"addr":"0x00","value":"0x00"}
+{"addr":"0x03","value":"0x11", "comment":"Mute left and right channels"}
+{"addr":"0x2A","value":"0x00", "comment": "Zero data DAC data paths i.e. mute"}
+{"addr":"0x25","value":"0x18", "comment": "Ignore MCLK Detection + Ignore Clock Halt Detection"}
+// I2S master begin
+//{"addr":"0x25","value":"0x1A", "comment": "Ignore MCLK Detection + Ignore Clock Halt Detection + disable clock auto set."}
+//{"addr":"0x09","value":"0x11", "comment": "Turn SCLK and LRCLK to output"}
+//{"addr":"0x0C","value":"0x00", "comment": "Reset SCLK and LRCLK dividers counter"}
+//{"addr":"0x20","value":"0x07", "comment": "Set MCLK divider to get SCLK"}
+//{"addr":"0x21","value":"0x3F", "comment": "SET SCLK divider to get LRCLK"}
+//{"addr":"0x0C","value":"0x03", "comment": "Enable SCLK and LRCLK dividers counter"}
+//{"addr":" 0x1C","value":"0x1F", "comment": "DAC clock divider for 48kHz"}
+// I2S master  end
+//{"addr":"0x0D","value":"0x13", "comment": "The PLL reference clock is SCLK - ignored in auto clock mode"}
+{"addr":"0x0D","value":"0x10", "comment": "The PLL reference clock is SCLK - ignored in auto clock mode"}
+{"addr":"0x02","value":"0x00", "comment": "Enable the device"}
+{"addr":"0x00","value":"0x00", "comment":"Enable sub channel / YM host buffer"}
+{"addr":"0x7F","value":"0x8C"}
+{"addr":"0x00","value":"0x1D", "comment":"prm_nosub"}
+{"addr":"0x28","value":"0x00"}
+{"addr":"0x29","value":"0x00"}
+{"addr":"0x2A","value":"0x00"}
+{"addr":"0x2B","value":"0x00"}
+{"addr":"0x00","value":"0x00", "comment":"Sample rate update"}
+{"addr":"0x7F","value":"0x00"}
+{"addr":"0x02","value":"0x80", "comment": "Reset DSP"}
+{"addr":"0x00","value":"0x00"}
+{"addr":"0x7F","value":"0x00"}
+{"addr":"0x22","value":"0x03", "comment":"speed 03-48k 04-96k"}
+{"addr":"0x00","value":"0x00"}
+{"addr":"0x7F","value":"0x00"}
+{"addr":"0x02","value":"0x00", "comment": "Enable the device"}

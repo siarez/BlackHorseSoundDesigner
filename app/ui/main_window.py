@@ -7,7 +7,8 @@ from .coef_check_tab import CoefCheckTab
 from .exporter import export_pf5_from_ui
 from .input_mixer_tab import InputMixerTab
 from .journal_tab import JournalTab
-
+from .es9821_tab import Es9821Tab
+from .i2c_script_tab import I2cScriptTab
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -33,6 +34,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.journal_tab = JournalTab(self)
         tabs.addTab(self.journal_tab, "Device Journal")
+
+        self.i2c_script_tab = I2cScriptTab(self)
+        tabs.addTab(self.i2c_script_tab, "I2C Script")
+
+        self.es9821_tab = Es9821Tab(self)
+        tabs.addTab(self.es9821_tab, "ES9821 Regs")
 
         # Toolbar with Export action
         tb = self.addToolBar('Main')

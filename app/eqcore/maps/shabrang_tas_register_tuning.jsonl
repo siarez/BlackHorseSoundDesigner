@@ -1,0 +1,16 @@
+{"type":"meta","device":"TAS3251","schema":"simple-reg-v1","source":"example_configs/TAS3251/48khz_1.1.h","range":"lines 2130-2145","fields":["addr","value","comment"]}
+{"addr":"0x00","value":"0x00","comment":"register tuning"}
+{"addr":"0x7F","value":"0x00"}
+{"addr":"0x00","value":"0x00"}
+{"addr":"0x07","value":"0x00", "comment": "SDOUT post processing"}
+{"addr":"0x08","value":"0x20", "comment": "SDOUT output pin enable"}
+{"addr":"0x55","value":"0x07", "comment": "SDOUT"}
+{"addr":"0x00","value":"0x00"}
+{"addr":"0x7F","value":"0x00"}
+{"addr":"0x00","value":"0x00"}
+{"addr":"0x3D","value":"0x30", "comment":  "Left digital volume"}
+{"addr":"0x3E","value":"0x30", "comment":  "Right digital volume"}
+{"addr":"0x00","value":"0x00"}
+{"addr":"0x7F","value":"0x00"}
+{"addr":"0x00","value":"0x01", "comment": "Go to page 1"}
+{"addr":"0x02","value":"0x00", "comment": "Analog gain 0dB"}

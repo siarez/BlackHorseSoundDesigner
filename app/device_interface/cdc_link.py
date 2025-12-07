@@ -319,3 +319,42 @@ class CdcLink:
         finally:
             self.ser.timeout = old_timeout
         return lines
+
+    def i2c_write(self, addr7: int, reg: int, val: int) -> bool:
+        """Single I2C register write via !i2cw <addr7> <reg> <val>."""
+        if not (0 <= addr7 <= 0x7F and 0 <= reg <= 0xFF and 0 <= val <= 0xFF):
+            raise ValueError("addr7 0..0x7F, reg/val 0..0xFF")
+        self._write_line(f"!i2cw {addr7:#x} {reg:#x} {val:#x}")
+        end_time = time.time() + DEFAULT_TIMEOUT
+        while time.time() < end_time:
+            ln = self._read_line()
+            if not ln:
+                continue
+            if ln == "OK I2CW":
+                return True
+            if ln.startswith("ERR"):
+                return False
+        return False
+
+    def esr(self, addr: int) -> int | None:
+        """Read one ES9821 register via !esr <addr>. Returns byte value or None on error."""
+        if addr < 0 or addr > 0xFF:
+            raise ValueError("ES9821 register must be 0..255")
+        self._write_line(f"!esr {addr:#x}")
+        # look for OK ESR 0xAA 0xVV
+        end_time = time.time() + DEFAULT_TIMEOUT
+        while time.time() < end_time:
+            ln = self._read_line()
+            if not ln:
+                continue
+            if ln.startswith("OK ESR"):
+                parts = ln.split()
+                if len(parts) >= 4:
+                    try:
+                        val = int(parts[3], 0)
+                        return val
+                    except Exception:
+                        break
+            if ln.startswith("ERR"):
+                return None
+        return None

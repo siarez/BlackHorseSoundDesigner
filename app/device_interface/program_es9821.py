@@ -92,12 +92,12 @@ def load_es9821_pairs(jsonl_path: Path) -> List[Tuple[int, int]]:
     with jsonl_path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line:
+            if not line or line.startswith('//'):
                 continue
             try:
                 obj = json.loads(line)
             except json.JSONDecodeError:
-                continue
+                print(f'Skipping {line} could not be parsed')
             if isinstance(obj, dict) and obj.get("type") == "meta":
                 continue
             addr = _parse_addr(obj.get("addr"))
