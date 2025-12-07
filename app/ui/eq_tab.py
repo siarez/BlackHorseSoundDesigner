@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import List
 from PySide6 import QtCore, QtWidgets, QtGui
+from pathlib import Path
 import pyqtgraph as pg
 import numpy as np
 
@@ -9,6 +10,7 @@ from app.eqcore import (
     default_freq_grid, sos_response_db
 )
 from .util import mk_dspin, row_color, build_plot, q_to_hex_twos
+from ..device_interface.cdc_link import CdcLink, auto_detect_port
 
 
 class EqTab(QtWidgets.QWidget):
@@ -94,6 +96,11 @@ class EqTab(QtWidgets.QWidget):
         self.lbl_warn.setStyleSheet("color: #b00020; font-weight: bold;")
         self.lbl_warn.setVisible(False)
         layout.addWidget(self.lbl_warn)
+        # Send EQ button
+        self.btn_send_eq = QtWidgets.QPushButton("Send EQ to Device")
+        self.btn_send_eq.setToolTip("Send current EQ coefficients + Stage Gain to TAS3251 and save in journal")
+        self.btn_send_eq.clicked.connect(self._on_send_eq)
+        layout.addWidget(self.btn_send_eq)
         return gb
 
     def _build_table_box(self) -> QtWidgets.QGroupBox:
@@ -300,3 +307,143 @@ class EqTab(QtWidgets.QWidget):
 
         self.curve_cascade.setData(self._freqs, acc_db)
         self._refresh_selected_coeffs()
+
+    def _on_send_eq(self):
+        # Compute hardware-mapped EQ sections (14) and stage gain (BQ15)
+        n = self.table.rowCount()
+        eq_sections = []
+        G = 1.0
+        for row in range(n):
+            p = self._params_from_row(row)
+            sos = design_biquad(p)
+            Si = max(abs(sos.b0), abs(sos.b1) / 2.0, abs(sos.b2))
+            b0 = sos.b0 / Si
+            b1 = sos.b1 / Si
+            b2 = sos.b2 / Si
+            a1 = sos.a1
+            a2 = sos.a2
+            G *= Si
+            eq_sections.append((b0, b1, b2, a1, a2))
+        eq_stage = (G, 0.0, 0.0, 0.0, 0.0)
+
+        # Load TAS3251 PF5 reference map for page/subaddr
+        # Locate reference map relative to this file for robustness
+        ref_path = (Path(__file__).resolve().parents[2] / 'app/eqcore/maps/shabrang_tas3251.jsonl')
+        try:
+            lines = ref_path.read_text(encoding='utf-8').splitlines()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'EQ', f'Failed to read reference map: {e}')
+            return
+
+        # Helper: quantize to 32-bit words according to TAS formats
+        def _u32_from(tag: str, vals: tuple[float,float,float,float,float], stage: bool) -> int:
+            b0, b1, b2, a1, a2 = vals
+            if stage:
+                if tag == 'B0': return int(q_to_hex_twos(b0, 27), 16)
+                if tag == 'B1': return int(q_to_hex_twos(b1, 26), 16)
+                if tag == 'B2': return int(q_to_hex_twos(b2, 27), 16)
+                if tag == 'A1': return int(q_to_hex_twos(-a1, 30), 16)
+                if tag == 'A2': return int(q_to_hex_twos(-a2, 31), 16)
+            else:
+                if tag == 'B0': return int(q_to_hex_twos(b0, 31), 16)
+                if tag == 'B1': return int(q_to_hex_twos(b1, 30), 16)
+                if tag == 'B2': return int(q_to_hex_twos(b2, 31), 16)
+                if tag == 'A1': return int(q_to_hex_twos(-a1, 30), 16)
+                if tag == 'A2': return int(q_to_hex_twos(-a2, 31), 16)
+            return 0
+
+        # Build 0x52 journal payloads for 4 sections: Left/Right EQ and IntGain
+        targets = {
+            'EQ LEFT 14 BQs': 0x09,
+            'LEFT INTGAIN BQ': 0x0A,
+            'EQ RIGHT 14 BQs': 0x0B,
+            'RIGHT INTGAIN BQ': 0x0C,
+        }
+        # Build a dict from section -> list of (page, subaddr, value_u32)
+        import json as _json
+        current = ''
+        section_items: dict[str, list[tuple[int,int,int]]] = {k: [] for k in targets}
+        for ln in lines:
+            s = ln.strip()
+            if not s:
+                continue
+            if s.startswith('{') and '"type": "section"' in s:
+                try:
+                    o = _json.loads(s)
+                    current = o.get('title', current)
+                except Exception:
+                    pass
+                continue
+            if current not in targets:
+                continue
+            try:
+                o = _json.loads(s)
+            except Exception:
+                continue
+            page = o.get('page'); sub = o.get('subaddr'); name = o.get('name','')
+            if not (page and sub and name):
+                continue
+            try:
+                page_i = int(page, 0); sub_i = int(sub, 0)
+            except Exception:
+                continue
+            if current in ('EQ LEFT 14 BQs','EQ RIGHT 14 BQs') and (name.startswith('CH-LBQ') or name.startswith('CH-RBQ')):
+                try:
+                    idx = int(name[6:-2]); tag = name[-2:]
+                except Exception:
+                    continue
+                if not (1 <= idx <= len(eq_sections) and tag in {'B0','B1','B2','A1','A2'}):
+                    continue
+                vals = eq_sections[idx-1]
+                val_u32 = _u32_from(tag, vals, stage=False)
+                section_items[current].append((page_i, sub_i, val_u32))
+            elif current in ('LEFT INTGAIN BQ','RIGHT INTGAIN BQ'):
+                tag = name[-2:] if len(name) >= 2 else ''
+                if tag not in {'B0','B1','B2','A1','A2'}:
+                    continue
+                val_u32 = _u32_from(tag, eq_stage, stage=True)
+                section_items[current].append((page_i, sub_i, val_u32))
+
+        # Pack and send each section as a 0x52 journal 32-bit stream (i2c7 + chunks)
+        port = auto_detect_port()
+        if not port:
+            QtWidgets.QMessageBox.warning(self, 'EQ', 'No device found (auto-detect failed)')
+            return
+        try:
+            link = CdcLink(port)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'EQ', f'Failed to open {port}: {e}')
+            return
+        try:
+            total_sections = 0; errs = 0
+            for sec, items in section_items.items():
+                if not items:
+                    continue
+                total_sections += 1
+                # Build payload: [i2c7] + 0xFD page + 0x80|reg + 4 bytes ...
+                payload = bytearray()
+                payload.append(0x4A)  # i2c7 (ignored by firmware but kept for consistency)
+                cur_page = None
+                for page_i, sub_i, val_u32 in items:
+                    if page_i != cur_page:
+                        payload.append(0xFD); payload.append(page_i & 0xFF)
+                        cur_page = page_i
+                    payload.append(0x80 | (sub_i & 0x7F))
+                    payload.append((val_u32 >> 24) & 0xFF)
+                    payload.append((val_u32 >> 16) & 0xFF)
+                    payload.append((val_u32 >> 8) & 0xFF)
+                    payload.append(val_u32 & 0xFF)
+                # Send via journal (type 0x52, id per section); firmware applies immediately
+                rec_id = targets[sec]
+                ok, pre_lines = link.jwrb_with_log(0x52, rec_id, bytes(payload))
+                if not ok:
+                    errs += 1
+            if errs == 0:
+                QtWidgets.QMessageBox.information(self, 'EQ', 'EQ coefficients saved + applied')
+            else:
+                QtWidgets.QMessageBox.warning(self, 'EQ', f'Completed with {errs} journal write errors')
+        finally:
+            try:
+                link.close()
+            except Exception:
+                pass
