@@ -9,10 +9,10 @@ class InputMixerTab(QtWidgets.QWidget):
     """UI for INPUT MIXER coefficients (Left/Right mix) in Q9.23.
 
     Registers:
-      - LefttoLeft   (L_out from L_in)
-      - RighttoLeft  (L_out from R_in)
-      - LefttoRight  (R_out from L_in)
-      - RighttoRight (R_out from R_in)
+      - 1-to-A   (A_out from In1)
+      - 2-to-A  (A_out from In2)
+      - 1-to-B  (B_out from In1)
+      - 2-to-B (B_out from In2)
     """
 
     def __init__(self, parent: QtWidgets.QWidget | None = None):
@@ -51,9 +51,9 @@ class InputMixerTab(QtWidgets.QWidget):
         help_html = (
             "<div style='line-height: 140%;'>"
             "Set the 2×2 mix matrix in signed Q9.23 (≈ −256 to +255.999999).<br>"
-            "Identity mix: L‑to‑L = 1.0, R‑to‑R = 1.0, others = 0.0.<br>"
-            "L_out = (L_in × L‑to‑L) + (R_in × R‑to‑L)<br>"
-            "R_out = (L_in × L‑to‑R) + (R_in × R‑to‑R)"
+            "Identity mix: In1‑to‑A = 1.0, In2‑to‑B = 1.0, others = 0.0.<br>"
+            "A out = (In1 × In1‑to‑A) + (In2 × In2‑to‑A)<br>"
+            "B out = (In1 × In1‑to‑B) + (In2 × In2‑to‑B)"
             "</div>"
         )
         help_lbl = QtWidgets.QLabel(help_html)
@@ -92,20 +92,20 @@ class InputMixerTab(QtWidgets.QWidget):
             return s
 
         row = 0
-        grid.addWidget(QtWidgets.QLabel("L_out = L_in ×"), row, 0)
-        self.spin_LtoL = spin(1.0)
-        grid.addWidget(self.spin_LtoL, row, 1)
-        grid.addWidget(QtWidgets.QLabel("+ R_in ×"), row, 2)
-        self.spin_RtoL = spin(0.0)
-        grid.addWidget(self.spin_RtoL, row, 3)
+        grid.addWidget(QtWidgets.QLabel("A_out = In1 ×"), row, 0)
+        self.spin_In1_to_A = spin(1.0)
+        grid.addWidget(self.spin_In1_to_A, row, 1)
+        grid.addWidget(QtWidgets.QLabel("+ In2 ×"), row, 2)
+        self.spin_In2_to_A = spin(1.0)
+        grid.addWidget(self.spin_In2_to_A, row, 3)
 
         row += 1
-        grid.addWidget(QtWidgets.QLabel("R_out = L_in ×"), row, 0)
-        self.spin_LtoR = spin(0.0)
-        grid.addWidget(self.spin_LtoR, row, 1)
-        grid.addWidget(QtWidgets.QLabel("+ R_in ×"), row, 2)
-        self.spin_RtoR = spin(1.0)
-        grid.addWidget(self.spin_RtoR, row, 3)
+        grid.addWidget(QtWidgets.QLabel("B_out = In1 ×"), row, 0)
+        self.spin_In1_to_B = spin(1.0)
+        grid.addWidget(self.spin_In1_to_B, row, 1)
+        grid.addWidget(QtWidgets.QLabel("+ In2 ×"), row, 2)
+        self.spin_In2_to_B = spin(1.0)
+        grid.addWidget(self.spin_In2_to_B, row, 3)
 
         # dB matrix below controls
         db_group = QtWidgets.QGroupBox("Effective Gains (dB)")
@@ -114,11 +114,11 @@ class InputMixerTab(QtWidgets.QWidget):
         db_grid.setVerticalSpacing(6)
         # headers
         db_grid.addWidget(QtWidgets.QLabel(""), 0, 0)
-        db_grid.addWidget(QtWidgets.QLabel("L_in"), 0, 1)
-        db_grid.addWidget(QtWidgets.QLabel("R_in"), 0, 2)
+        db_grid.addWidget(QtWidgets.QLabel("In1"), 0, 1)
+        db_grid.addWidget(QtWidgets.QLabel("In2"), 0, 2)
         # row labels
-        db_grid.addWidget(QtWidgets.QLabel("L_out"), 1, 0)
-        db_grid.addWidget(QtWidgets.QLabel("R_out"), 2, 0)
+        db_grid.addWidget(QtWidgets.QLabel("A_out"), 1, 0)
+        db_grid.addWidget(QtWidgets.QLabel("B_out"), 2, 0)
         # value labels
         self.lbl_db_LtoL = QtWidgets.QLabel("")
         self.lbl_db_RtoL = QtWidgets.QLabel("")
@@ -142,10 +142,10 @@ class InputMixerTab(QtWidgets.QWidget):
 
     def _refresh_hex(self):
         lines = []
-        lines.append(f"LefttoLeft   = {self.spin_LtoL.value():.6f}  ->  {self._q923_hex(self.spin_LtoL.value())}")
-        lines.append(f"RighttoLeft  = {self.spin_RtoL.value():.6f}  ->  {self._q923_hex(self.spin_RtoL.value())}")
-        lines.append(f"LefttoRight  = {self.spin_LtoR.value():.6f}  ->  {self._q923_hex(self.spin_LtoR.value())}")
-        lines.append(f"RighttoRight = {self.spin_RtoR.value():.6f}  ->  {self._q923_hex(self.spin_RtoR.value())}")
+        lines.append(f"In1 to A   = {self.spin_In1_to_A.value():.6f}  ->  {self._q923_hex(self.spin_In1_to_A.value())}")
+        lines.append(f"In2 to A  = {self.spin_In2_to_A.value():.6f}  ->  {self._q923_hex(self.spin_In2_to_A.value())}")
+        lines.append(f"In1 to B  = {self.spin_In1_to_B.value():.6f}  ->  {self._q923_hex(self.spin_In1_to_B.value())}")
+        lines.append(f"In2 to B = {self.spin_In2_to_B.value():.6f}  ->  {self._q923_hex(self.spin_In2_to_B.value())}")
         self.txt_hex.setPlainText("\n".join(lines))
 
         # Update dB labels (20*log10(|gain|); show −∞ for 0, mark inversion on negative gains)
@@ -156,16 +156,16 @@ class InputMixerTab(QtWidgets.QWidget):
             inv = " (inv)" if v < 0.0 else ""
             return f"{db:.2f} dB{inv}"
 
-        self.lbl_db_LtoL.setText(fmt_db(self.spin_LtoL.value()))
-        self.lbl_db_RtoL.setText(fmt_db(self.spin_RtoL.value()))
-        self.lbl_db_LtoR.setText(fmt_db(self.spin_LtoR.value()))
-        self.lbl_db_RtoR.setText(fmt_db(self.spin_RtoR.value()))
+        self.lbl_db_LtoL.setText(fmt_db(self.spin_In1_to_A.value()))
+        self.lbl_db_RtoL.setText(fmt_db(self.spin_In2_to_A.value()))
+        self.lbl_db_LtoR.setText(fmt_db(self.spin_In1_to_B.value()))
+        self.lbl_db_RtoR.setText(fmt_db(self.spin_In2_to_B.value()))
 
     def values_hex(self) -> dict[str, str]:
         """Return mapping of INPUT MIXER names -> hex string in Q9.23."""
         return {
-            'LefttoLeft': self._q923_hex(self.spin_LtoL.value()),
-            'RighttoLeft': self._q923_hex(self.spin_RtoL.value()),
-            'LefttoRight': self._q923_hex(self.spin_LtoR.value()),
-            'RighttoRight': self._q923_hex(self.spin_RtoR.value()),
+            'LefttoLeft': self._q923_hex(self.spin_In1_to_A.value()),
+            'RighttoLeft': self._q923_hex(self.spin_In2_to_A.value()),
+            'LefttoRight': self._q923_hex(self.spin_In1_to_B.value()),
+            'RighttoRight': self._q923_hex(self.spin_In2_to_B.value()),
         }

@@ -13,4 +13,4 @@
 {"addr":"0x00","value":"0x00"}
 {"addr":"0x7F","value":"0x00"}
 {"addr":"0x00","value":"0x01", "comment": "Go to page 1"}
-{"addr":"0x02","value":"0x00", "comment": "Analog gain 0dB"}
+{"addr":"0x02","value":"0x00", "comment": "Analog gain 0x00 for 0dB or 0x11 for -6dB"}
