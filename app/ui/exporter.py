@@ -8,7 +8,7 @@ from PySide6 import QtWidgets
 
 from .crossover_tab import CrossoverTab
 from .eq_tab import EqTab
-from app.eqcore import design_biquad
+from app.eqcore import design_biquad, FilterType
 from .util import q_to_hex_twos
 
 
@@ -74,7 +74,11 @@ def export_pf5_from_ui(parent: QtWidgets.QWidget, xo: CrossoverTab,
         for row in range(n):
             p = eq._params_from_row(row)
             sos = design_biquad(p)
-            Si = max(abs(sos.b0), abs(sos.b1) / 2.0, abs(sos.b2))
+            # Match EQ tab mapping: do not scale LPF; scale others per datasheet
+            if p.typ == FilterType.LPF:
+                Si = 1.0
+            else:
+                Si = max(abs(sos.b0), abs(sos.b1) / 2.0, abs(sos.b2))
             b0 = sos.b0 / Si
             b1 = sos.b1 / Si
             b2 = sos.b2 / Si

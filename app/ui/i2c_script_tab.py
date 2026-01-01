@@ -96,13 +96,20 @@ class I2cScriptTab(QtWidgets.QWidget):
             if not line:
                 continue
             toks = line.split()
-            if len(toks) < 4 or toks[0].lower() != 'w':
+            if toks[0].lower() == 'w' and len(toks) >= 4:
+                try:
+                    a = int(toks[1], 0); r = int(toks[2], 0); v = int(toks[3], 0)
+                except Exception:
+                    out.append((idx, -1, -1, -1)); continue
+                out.append((idx, a, r, v))
+            elif toks[0].lower() == 'r' and len(toks) >= 3:
+                try:
+                    a = int(toks[1], 0); r = int(toks[2], 0)
+                except Exception:
+                    out.append((idx, -1, -1, -1)); continue
+                out.append((idx, a, r, -999))  # sentinel for read
+            else:
                 continue
-            try:
-                a = int(toks[1], 0); r = int(toks[2], 0); v = int(toks[3], 0)
-            except Exception:
-                out.append((idx, -1, -1, -1)); continue
-            out.append((idx, a, r, v))
         return out
 
     def _on_run(self):
@@ -115,13 +122,21 @@ class I2cScriptTab(QtWidgets.QWidget):
         self.output.clear()
         ok_all = True
         for ln, a, r, v in cmds:
-            if a < 0 or r < 0 or v < 0:
+            # Accept sentinel v == -999 for reads
+            if a < 0 or r < 0 or (v < 0 and v != -999):
                 self.output.appendPlainText(f"Line {ln}: parse error")
                 ok_all = False
                 continue
-            ok = self._link.i2c_write(a, r, v)
-            self.output.appendPlainText(f"Line {ln}: w {a:#x} {r:#x} {v:#x} -> {'OK' if ok else 'ERR'}")
-            if not ok:
-                ok_all = False
+            if v == -999:
+                val = self._link.i2c_read(a, r)
+                if val is None:
+                    self.output.appendPlainText(f"Line {ln}: r {a:#x} {r:#x} -> ERR")
+                    ok_all = False
+                else:
+                    self.output.appendPlainText(f"Line {ln}: r {a:#x} {r:#x} -> OK 0x{val:02X}")
+            else:
+                ok = self._link.i2c_write(a, r, v)
+                self.output.appendPlainText(f"Line {ln}: w {a:#x} {r:#x} {v:#x} -> {'OK' if ok else 'ERR'}")
+                if not ok:
+                    ok_all = False
         self.output.appendPlainText("Done: all OK" if ok_all else "Done: with errors")
-

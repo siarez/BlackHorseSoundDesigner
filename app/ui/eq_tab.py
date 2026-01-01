@@ -230,11 +230,16 @@ class EqTab(QtWidgets.QWidget):
             mapped.append((1.0, 0.0, 0.0, 0.0, 0.0))
         else:
             # Hardware-mapped per datasheet 7.5.2.4 + Table 7-25
+            # Exception: For LPF, do not apply per-section scaling. Extremely small
+            # numerators at low f0 quantize poorly if blown up and shifted to BQ15.
             G = 1.0
             for row in range(n):
                 p = self._params_from_row(row)
                 sos = design_biquad(p)
-                Si = max(abs(sos.b0), abs(sos.b1) / 2.0, abs(sos.b2))
+                if p.typ == FilterType.LPF:
+                    Si = 1.0
+                else:
+                    Si = max(abs(sos.b0), abs(sos.b1) / 2.0, abs(sos.b2))
                 b0 = sos.b0 / Si
                 b1 = sos.b1 / Si
                 b2 = sos.b2 / Si
@@ -316,7 +321,10 @@ class EqTab(QtWidgets.QWidget):
         for row in range(n):
             p = self._params_from_row(row)
             sos = design_biquad(p)
-            Si = max(abs(sos.b0), abs(sos.b1) / 2.0, abs(sos.b2))
+            if p.typ == FilterType.LPF:
+                Si = 1.0
+            else:
+                Si = max(abs(sos.b0), abs(sos.b1) / 2.0, abs(sos.b2))
             b0 = sos.b0 / Si
             b1 = sos.b1 / Si
             b2 = sos.b2 / Si

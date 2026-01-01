@@ -11,6 +11,9 @@ from app.eqcore import (
     design_first_order_lpf, design_first_order_hpf,
 )
 from .util import mk_dspin, row_color, build_plot, q_to_hex_twos
+from ..device_interface.cdc_link import CdcLink, auto_detect_port
+from pathlib import Path
+import json as _json
 
 
 class CrossoverTab(QtWidgets.QWidget):
@@ -34,6 +37,12 @@ class CrossoverTab(QtWidgets.QWidget):
         self.chk_hex = QtWidgets.QCheckBox("Show 2's complement hex")
         self.chk_hex.toggled.connect(self._update_xo_plots)
         left_v.addWidget(self.chk_hex)
+
+        # Send to device button
+        self.btn_send_xo = QtWidgets.QPushButton("Send Crossover to Device")
+        self.btn_send_xo.setToolTip("Send current CROSS OVER and SUB CROSS OVER biquad coefficients to TAS3251")
+        self.btn_send_xo.clicked.connect(self._on_send_crossover)
+        left_v.addWidget(self.btn_send_xo)
 
         gb_ca = QtWidgets.QGroupBox("Channel A Coeffs (a0=1)")
         ca_v = QtWidgets.QVBoxLayout(gb_ca)
@@ -520,3 +529,170 @@ class CrossoverTab(QtWidgets.QWidget):
 
         self.txt_coeffs_A.setPlainText(fmt_lines(self.table_xo_A, self.chk_xo_pol_A.isChecked()))
         self.txt_coeffs_B.setPlainText(fmt_lines(self.table_xo_B, self.chk_xo_pol_B.isChecked()))
+
+    def _on_send_crossover(self):
+        # Build Channel A/B sections (5 each) using current UI state
+        sections_A = []
+        for row in range(self.table_xo_A.rowCount()):
+            invert_this = self.chk_xo_pol_A.isChecked() and (row == 0)
+            sections_A.append(self._design_xo_biquad(self.table_xo_A, row, invert_polarity=invert_this))
+        sections_B = []
+        for row in range(self.table_xo_B.rowCount()):
+            invert_this = self.chk_xo_pol_B.isChecked() and (row == 0)
+            sections_B.append(self._design_xo_biquad(self.table_xo_B, row, invert_polarity=invert_this))
+
+        # Load TAS3251 PF5 reference map for page/subaddr
+        ref_path = (Path(__file__).resolve().parents[2] / 'app/eqcore/maps/shabrang_tas3251.jsonl')
+        try:
+            lines = ref_path.read_text(encoding='utf-8').splitlines()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Crossover', f'Failed to read reference map: {e}')
+            return
+
+        # Helper: quantize to 32-bit words according to TAS formats (standard BQ)
+        def _u32_from(tag: str, vals) -> int:
+            b0, b1, b2, a1, a2 = vals
+            if tag == 'B0': return int(q_to_hex_twos(b0, 31), 16)
+            if tag == 'B1': return int(q_to_hex_twos(b1, 30), 16)
+            if tag == 'B2': return int(q_to_hex_twos(b2, 31), 16)
+            if tag == 'A1': return int(q_to_hex_twos(-a1, 30), 16)
+            if tag == 'A2': return int(q_to_hex_twos(-a2, 31), 16)
+            return 0
+
+        # Collect map items for CROSS OVER BQs, SUB CROSS OVER BQs, PHASE OPTIMIZER (Delays), and OUTPUT CROSS BAR (Gains)
+        current = ''
+        items_A: list[tuple[int,int,int]] = []
+        items_B: list[tuple[int,int,int]] = []
+        items_D: list[tuple[int,int,int]] = []  # Delays (DelayLeft, DelaySub); ignore DelayRight (0x64)
+        items_G: list[tuple[int,int,int]] = []  # Output crossbar gains we control from XO tab
+        for ln in lines:
+            s = ln.strip()
+            if not s:
+                continue
+            if s.startswith('{') and '"type": "section"' in s:
+                try:
+                    o = _json.loads(s)
+                    current = o.get('title', current)
+                except Exception:
+                    pass
+                continue
+            if current not in ('CROSS OVER BQs', 'SUB CROSS OVER BQs', 'PHASE OPTIMIZER', 'OUTPUT CROSS BAR'):
+                continue
+            try:
+                o = _json.loads(s)
+            except Exception:
+                continue
+            page = o.get('page'); sub = o.get('subaddr'); name = o.get('name','')
+            if not (page and sub and name):
+                continue
+            try:
+                page_i = int(page, 0); sub_i = int(sub, 0)
+            except Exception:
+                continue
+
+            if current == 'CROSS OVER BQs' and name.startswith('BQ'):
+                try:
+                    idx = int(name[2:-2])
+                    tag = name[-2:]
+                except Exception:
+                    continue
+                if not (1 <= idx <= len(sections_A) and tag in {'B0','B1','B2','A1','A2'}):
+                    continue
+                sos = sections_A[idx-1]
+                val_u32 = _u32_from(tag, (sos.b0, sos.b1, sos.b2, sos.a1, sos.a2))
+                items_A.append((page_i, sub_i, val_u32))
+            elif current == 'SUB CROSS OVER BQs' and name.startswith('CH-SubBQ'):
+                try:
+                    idx = int(name[8:-2])
+                    tag = name[-2:]
+                except Exception:
+                    continue
+                if not (1 <= idx <= len(sections_B) and tag in {'B0','B1','B2','A1','A2'}):
+                    continue
+                sos = sections_B[idx-1]
+                val_u32 = _u32_from(tag, (sos.b0, sos.b1, sos.b2, sos.a1, sos.a2))
+                items_B.append((page_i, sub_i, val_u32))
+            elif current == 'PHASE OPTIMIZER' and name in ('DelayLeft','DelayRight','DelaySub'):
+                # 32.0 format raw integer (samples). Left/Right from Channel A; Sub from Channel B.
+                delay_A = int(getattr(self, 'spin_delay_A', None).value() if hasattr(self, 'spin_delay_A') else 0)
+                delay_B = int(getattr(self, 'spin_delay_B', None).value() if hasattr(self, 'spin_delay_B') else 0)
+                v = delay_A if name in ('DelayLeft','DelayRight') else delay_B
+                items_D.append((page_i, sub_i, int(v) & 0xFFFFFFFF))
+            elif current == 'OUTPUT CROSS BAR':
+                # Map Channel A gain to AnalogLeftfromLeft, Channel B gain to AnalogRightfromSub (Q9.23)
+                gA_db = float(getattr(self, 'spin_gain_A', None).value()) if hasattr(self, 'spin_gain_A') else 0.0
+                gB_db = float(getattr(self, 'spin_gain_B', None).value()) if hasattr(self, 'spin_gain_B') else 0.0
+                if name == 'AnalogLeftfromLeft':
+                    gA_lin = 10.0 ** (gA_db / 20.0)
+                    u32 = int(q_to_hex_twos(gA_lin, 23), 16)
+                    items_G.append((page_i, sub_i, u32))
+                elif name == 'AnalogRightfromSub':
+                    gB_lin = 10.0 ** (gB_db / 20.0)
+                    u32 = int(q_to_hex_twos(gB_lin, 23), 16)
+                    items_G.append((page_i, sub_i, u32))
+
+        # Nothing to send?
+        if not items_A and not items_B and not items_D and not items_G:
+            QtWidgets.QMessageBox.warning(self, 'Crossover', 'No crossover/delay/gain map entries found to send')
+            return
+
+        # Build and send payloads for each section as type 0x52 records
+        port = auto_detect_port()
+        if not port:
+            QtWidgets.QMessageBox.warning(self, 'Crossover', 'No device found (auto-detect failed)')
+            return
+        try:
+            link = CdcLink(port)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Crossover', f'Failed to open {port}: {e}')
+            return
+
+        try:
+            errs = 0; sent = 0
+            apply_logs: list[str] = []
+            for sec_name, items in (("CROSS OVER BQs", items_A), ("SUB CROSS OVER BQs", items_B), ("PHASE OPTIMIZER", items_D), ("OUTPUT CROSS BAR", items_G)):
+                if not items:
+                    continue
+                # Payload format matches eq_tab: [i2c7] + (0xFD page, then 0x80|sub + 4 bytes per value)
+                payload = bytearray()
+                payload.append(0x4A)  # i2c7
+                cur_page = None
+                for page_i, sub_i, val_u32 in items:
+                    if page_i != cur_page:
+                        payload.append(0xFD); payload.append(page_i & 0xFF)
+                        cur_page = page_i
+                    payload.append(0x80 | (sub_i & 0x7F))
+                    payload.append((val_u32 >> 24) & 0xFF)
+                    payload.append((val_u32 >> 16) & 0xFF)
+                    payload.append((val_u32 >> 8) & 0xFF)
+                    payload.append(val_u32 & 0xFF)
+                # record ids: 0x05->XO A, 0x06->XO B, 0x07->Delays, 0x08->Gains
+                rec_id = (
+                    0x05 if sec_name.startswith('CROSS') else
+                    (0x06 if sec_name.startswith('SUB') else (0x07 if sec_name.startswith('PHASE') else 0x08))
+                )
+                ok, lines = link.jwrb_with_log(0x52, rec_id, bytes(payload))
+                # Capture any APPLY lines for visibility
+                for ln in lines:
+                    if ln.startswith('OK APPLY') or ln.startswith('ERR APPLY'):
+                        apply_logs.append(f"[{sec_name}] {ln}")
+                sent += 1
+                if not ok:
+                    errs += 1
+            if errs == 0 and sent > 0:
+                msg = 'Crossover coefficients saved + applied'
+                if apply_logs:
+                    msg += "\n\n" + "\n".join(apply_logs)
+                QtWidgets.QMessageBox.information(self, 'Crossover', msg)
+            elif sent == 0:
+                QtWidgets.QMessageBox.warning(self, 'Crossover', 'Nothing was sent')
+            else:
+                msg = f'Completed with {errs} journal write errors'
+                if apply_logs:
+                    msg += "\n\n" + "\n".join(apply_logs)
+                QtWidgets.QMessageBox.warning(self, 'Crossover', msg)
+        finally:
+            try:
+                link.close()
+            except Exception:
+                pass

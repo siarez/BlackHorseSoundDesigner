@@ -336,6 +336,28 @@ class CdcLink:
                 return False
         return False
 
+    def i2c_read(self, addr7: int, reg: int) -> int | None:
+        """Single I2C register read via !i2cr <addr7> <reg>. Returns byte or None."""
+        if not (0 <= addr7 <= 0x7F and 0 <= reg <= 0xFF):
+            raise ValueError("addr7 0..0x7F, reg 0..0xFF")
+        self._write_line(f"!i2cr {addr7:#x} {reg:#x}")
+        end_time = time.time() + DEFAULT_TIMEOUT
+        while time.time() < end_time:
+            ln = self._read_line()
+            if not ln:
+                continue
+            if ln.startswith("OK I2CR"):
+                parts = ln.split()
+                try:
+                    # Format: OK I2CR 0xRR 0xVV
+                    val = int(parts[-1], 0)
+                    return val & 0xFF
+                except Exception:
+                    return None
+            if ln.startswith("ERR"):
+                return None
+        return None
+
     def esr(self, addr: int) -> int | None:
         """Read one ES9821 register via !esr <addr>. Returns byte value or None on error."""
         if addr < 0 or addr > 0xFF:

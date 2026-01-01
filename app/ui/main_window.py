@@ -9,6 +9,7 @@ from .input_mixer_tab import InputMixerTab
 from .journal_tab import JournalTab
 from .es9821_tab import Es9821Tab
 from .i2c_script_tab import I2cScriptTab
+from .general_tab import GeneralTab
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -18,6 +19,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         tabs = QtWidgets.QTabWidget(self)
         self.setCentralWidget(tabs)
+
+        # General utilities (recovery, erase, etc.)
+        self.general_tab = GeneralTab(self)
+        tabs.addTab(self.general_tab, "General")
 
         # Add tabs in process-flow order: Input Mixer first, then EQ, then Crossover
         self.mixer_tab = InputMixerTab(self)
