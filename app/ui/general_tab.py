@@ -17,38 +17,42 @@ class GeneralTab(QtWidgets.QWidget):
         super().__init__(parent)
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(8)
+        root.setSpacing(10)
 
-        info = QtWidgets.QLabel(
-            "Utilities for device bring-up and recovery.\n"
-        )
-        info.setWordWrap(True)
-        root.addWidget(info)
+        # Rows: [Button] [Description]
+        grid = QtWidgets.QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+        grid.setColumnStretch(0, 0)
+        grid.setColumnStretch(1, 1)
 
-        # Load From Device helper (reads UI state from sidecar records only)
-        load_info = QtWidgets.QLabel(
-            "Load From Device reads saved UI settings from the device's memory "
-            "It does not program the DSP; it only updates the app's UI to reflect the connected device's configs."
-        )
-        load_info.setWordWrap(True)
-        root.addWidget(load_info)
-
+        # Row 0: Load From Device
         self.btn_load_from_device = QtWidgets.QPushButton("Load From Device")
-        self.btn_load_from_device.setToolTip(
-            "Read configs from the device and apply to UI"
-        )
+        self.btn_load_from_device.setToolTip("Read compact sidecar (0x53) from device and apply to UI")
         self.btn_load_from_device.clicked.connect(self._on_load_from_device)
-        root.addWidget(self.btn_load_from_device)
+        grid.addWidget(self.btn_load_from_device, 0, 0, 1, 1)
 
-        info = QtWidgets.QLabel(
-            "Warning: This erases EEPROM clears the entire on-board DSP and ADC configs."
+        load_desc = QtWidgets.QLabel(
+            "Reads saved UI settings from the device's journal sidecar records (type 0x53) "
+            "and populates the tabs.\nDoes not program the DSP; only updates the app UI."
         )
-        info.setWordWrap(True)
-        root.addWidget(info)
+        load_desc.setWordWrap(True)
+        grid.addWidget(load_desc, 0, 1, 1, 1)
+
+        # Row 1: Erase EEPROM (Journal)
         self.btn_erase = QtWidgets.QPushButton("Erase EEPROM (Journal)")
-        self.btn_erase.setToolTip("Fills the whole 24C256 with 0xFF")
+        self.btn_erase.setToolTip("Fills the entire 24C256 with 0xFF via !fill; removes all saved records")
         self.btn_erase.clicked.connect(self._on_erase)
-        root.addWidget(self.btn_erase)
+        grid.addWidget(self.btn_erase, 1, 0, 1, 1)
+
+        erase_desc = QtWidgets.QLabel(
+            "Dangerous: erases the entire on-board journal (all saved profiles/records).\n"
+            "Use for recovery or to reset the device's stored configuration."
+        )
+        erase_desc.setWordWrap(True)
+        grid.addWidget(erase_desc, 1, 1, 1, 1)
+
+        root.addLayout(grid)
 
         self.lbl_status = QtWidgets.QLabel("")
         self.lbl_status.setStyleSheet("color: palette(mid)")

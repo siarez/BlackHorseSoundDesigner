@@ -14,8 +14,9 @@ from .output_crossbar_tab import OutputCrossbarTab
 from .general_tab import GeneralTab
 
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self):
+    def __init__(self, dev_mode: bool = False):
         super().__init__()
+        self._dev_mode = bool(dev_mode)
         self.setWindowTitle("Black Horse Sound Designer")
         self.resize(1100, 700)
 
@@ -49,23 +50,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.xo_tab = CrossoverTab(self)
         tabs.addTab(self.xo_tab, "Crossover")
 
-        self.coef_tab = CoefCheckTab(self)
-        tabs.addTab(self.coef_tab, "Coef Check")
-
-        self.journal_tab = JournalTab(self)
-        tabs.addTab(self.journal_tab, "Device Journal")
-
-        self.i2c_script_tab = I2cScriptTab(self)
-        tabs.addTab(self.i2c_script_tab, "I2C Script")
-
-        self.es9821_tab = Es9821Tab(self)
-        tabs.addTab(self.es9821_tab, "ES9821 Regs")
-
         self.mix_gain_tab = MixGainAdjustTab(self)
         tabs.addTab(self.mix_gain_tab, "Mix/Gain Adjust")
 
         self.xbar_tab = OutputCrossbarTab(self)
         tabs.addTab(self.xbar_tab, "Output Cross Bar")
+
+        if self._dev_mode:
+            self.coef_tab = CoefCheckTab(self)
+            tabs.addTab(self.coef_tab, "Coef Check")
+
+            self.journal_tab = JournalTab(self)
+            tabs.addTab(self.journal_tab, "Device Journal")
+
+            self.i2c_script_tab = I2cScriptTab(self)
+            tabs.addTab(self.i2c_script_tab, "I2C Script")
+
+            self.es9821_tab = Es9821Tab(self)
+            tabs.addTab(self.es9821_tab, "ES9821 Regs")
+
 
         # Toolbar with Export action
         tb = self.addToolBar('Main')
@@ -73,9 +76,10 @@ class MainWindow(QtWidgets.QMainWindow):
         act_save_tb.triggered.connect(self._on_save_state)
         act_load_tb = tb.addAction('Load State')
         act_load_tb.triggered.connect(self._on_load_state)
-        tb.addSeparator()
-        act_export = tb.addAction('Export Config')
-        act_export.triggered.connect(self._on_export)
+        if self._dev_mode:
+            tb.addSeparator()
+            act_export = tb.addAction('Export Config')
+            act_export.triggered.connect(self._on_export)
 
     def _on_export(self):
         out = export_pf5_from_ui(self, self.xo_tab)

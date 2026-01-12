@@ -136,12 +136,12 @@ class InputMixerTab(QtWidgets.QWidget):
         vright.addWidget(db_group)
 
         # Spacer to push grid up
-        vright.addStretch(1)
-        # Send button at bottom (match EQ/XO tabs)
+        # Send button at bottom-left panel for consistency
         self.btn_send = QtWidgets.QPushButton("Send Input Mixer to Device")
         self.btn_send.setToolTip("Send INPUT MIXER (Q9.23) to TAS3251 via journal")
         self.btn_send.clicked.connect(self._on_send)
-        vright.addWidget(self.btn_send)
+        vleft.addStretch(1)
+        vleft.addWidget(self.btn_send)
         root.addWidget(right, 1)
 
         self._refresh_hex()

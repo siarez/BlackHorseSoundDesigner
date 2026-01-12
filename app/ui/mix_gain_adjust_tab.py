@@ -81,11 +81,12 @@ class MixGainAdjustTab(QtWidgets.QWidget):
             grid.addWidget(s, row, 1)
             row += 1
 
-        vright.addStretch(1)
+        # Send button at bottom-left for consistency
         self.btn_send = QtWidgets.QPushButton("Send Mix/Gain Adjust to Device")
         self.btn_send.setToolTip("Send MIX/GAIN ADJUST (Q9.23) to TAS3251 via journal")
         self.btn_send.clicked.connect(self._on_send)
-        vright.addWidget(self.btn_send)
+        vleft.addStretch(1)
+        vleft.addWidget(self.btn_send)
         root.addWidget(right, 1)
 
         self._refresh_hex()
