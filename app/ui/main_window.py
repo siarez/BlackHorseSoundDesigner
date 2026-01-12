@@ -9,6 +9,8 @@ from .input_mixer_tab import InputMixerTab
 from .journal_tab import JournalTab
 from .es9821_tab import Es9821Tab
 from .i2c_script_tab import I2cScriptTab
+from .mix_gain_adjust_tab import MixGainAdjustTab
+from .output_crossbar_tab import OutputCrossbarTab
 from .general_tab import GeneralTab
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -45,6 +47,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.es9821_tab = Es9821Tab(self)
         tabs.addTab(self.es9821_tab, "ES9821 Regs")
+
+        self.mix_gain_tab = MixGainAdjustTab(self)
+        tabs.addTab(self.mix_gain_tab, "Mix/Gain Adjust")
+
+        self.xbar_tab = OutputCrossbarTab(self)
+        tabs.addTab(self.xbar_tab, "Output Cross Bar")
 
         # Toolbar with Export action
         tb = self.addToolBar('Main')

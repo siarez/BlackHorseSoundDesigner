@@ -11,6 +11,10 @@ from app.eqcore import (
 )
 from .util import mk_dspin, row_color, build_plot, q_to_hex_twos
 from ..device_interface.cdc_link import CdcLink, auto_detect_port
+from ..device_interface.record_ids import (
+    TYPE_COEFF,
+    REC_EQ_L, REC_INTGAIN_L, REC_EQ_R, REC_INTGAIN_R,
+)
 
 
 class EqTab(QtWidgets.QWidget):
@@ -29,6 +33,12 @@ class EqTab(QtWidgets.QWidget):
         vleft.setContentsMargins(0, 0, 0, 0)
         vleft.setSpacing(0)
         vleft.addWidget(self._build_readout_group())
+        # Place the Send button at the bottom (consistent with Crossover tab)
+        vleft.addStretch(1)
+        self.btn_send_eq = QtWidgets.QPushButton("Send EQ to Device")
+        self.btn_send_eq.setToolTip("Send current EQ coefficients + Stage Gain to TAS3251 and save in journal")
+        self.btn_send_eq.clicked.connect(self._on_send_eq)
+        vleft.addWidget(self.btn_send_eq)
         root.addWidget(left, 0)
 
         # Right: plot + table
@@ -96,11 +106,6 @@ class EqTab(QtWidgets.QWidget):
         self.lbl_warn.setStyleSheet("color: #b00020; font-weight: bold;")
         self.lbl_warn.setVisible(False)
         layout.addWidget(self.lbl_warn)
-        # Send EQ button
-        self.btn_send_eq = QtWidgets.QPushButton("Send EQ to Device")
-        self.btn_send_eq.setToolTip("Send current EQ coefficients + Stage Gain to TAS3251 and save in journal")
-        self.btn_send_eq.clicked.connect(self._on_send_eq)
-        layout.addWidget(self.btn_send_eq)
         return gb
 
     def _build_table_box(self) -> QtWidgets.QGroupBox:
@@ -362,10 +367,10 @@ class EqTab(QtWidgets.QWidget):
 
         # Build 0x52 journal payloads for 4 sections: Left/Right EQ and IntGain
         targets = {
-            'EQ LEFT 14 BQs': 0x09,
-            'LEFT INTGAIN BQ': 0x0A,
-            'EQ RIGHT 14 BQs': 0x0B,
-            'RIGHT INTGAIN BQ': 0x0C,
+            'EQ LEFT 14 BQs': REC_EQ_L,
+            'LEFT INTGAIN BQ': REC_INTGAIN_L,
+            'EQ RIGHT 14 BQs': REC_EQ_R,
+            'RIGHT INTGAIN BQ': REC_INTGAIN_R,
         }
         # Build a dict from section -> list of (page, subaddr, value_u32)
         import json as _json
@@ -443,7 +448,7 @@ class EqTab(QtWidgets.QWidget):
                     payload.append(val_u32 & 0xFF)
                 # Send via journal (type 0x52, id per section); firmware applies immediately
                 rec_id = targets[sec]
-                ok, pre_lines = link.jwrb_with_log(0x52, rec_id, bytes(payload))
+                ok, pre_lines = link.jwrb_with_log(TYPE_COEFF, rec_id, bytes(payload))
                 if not ok:
                     errs += 1
             if errs == 0:

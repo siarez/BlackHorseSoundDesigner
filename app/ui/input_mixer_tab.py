@@ -3,6 +3,10 @@ from PySide6 import QtWidgets, QtCore, QtGui
 import math
 
 from .util import mk_dspin, q_to_hex_twos
+from ..device_interface.cdc_link import CdcLink, auto_detect_port
+from ..device_interface.record_ids import TYPE_COEFF, REC_INPUT_MIXER
+from pathlib import Path
+import json as _json
 
 
 class InputMixerTab(QtWidgets.QWidget):
@@ -132,6 +136,11 @@ class InputMixerTab(QtWidgets.QWidget):
 
         # Spacer to push grid up
         vright.addStretch(1)
+        # Send button at bottom (match EQ/XO tabs)
+        self.btn_send = QtWidgets.QPushButton("Send Input Mixer to Device")
+        self.btn_send.setToolTip("Send INPUT MIXER (Q9.23) to TAS3251 via journal")
+        self.btn_send.clicked.connect(self._on_send)
+        vright.addWidget(self.btn_send)
         root.addWidget(right, 1)
 
         self._refresh_hex()
@@ -169,3 +178,88 @@ class InputMixerTab(QtWidgets.QWidget):
             'LefttoRight': self._q923_hex(self.spin_In1_to_B.value()),
             'RighttoRight': self._q923_hex(self.spin_In2_to_B.value()),
         }
+
+    def _on_send(self):
+        # Load INPUT MIXER map rows
+        ref_path = (Path(__file__).resolve().parents[2] / 'app/eqcore/maps/shabrang_tas3251.jsonl')
+        try:
+            lines = ref_path.read_text(encoding='utf-8').splitlines()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Input Mixer', f'Failed to read reference map: {e}')
+            return
+
+        targets = self.values_hex()
+        items: list[tuple[int,int,int]] = []
+        current = ''
+        for ln in lines:
+            s = ln.strip()
+            if not s:
+                continue
+            if s.startswith('{') and '"type": "section"' in s:
+                try:
+                    o = _json.loads(s)
+                    current = o.get('title', current)
+                except Exception:
+                    pass
+                continue
+            if current != 'INPUT MIXER':
+                continue
+            try:
+                o = _json.loads(s)
+            except Exception:
+                continue
+            name = o.get('name','')
+            if name not in targets:
+                continue
+            page = o.get('page'); sub = o.get('subaddr')
+            if not (page and sub):
+                continue
+            try:
+                page_i = int(page, 0); sub_i = int(sub, 0)
+                val_u32 = int(targets[name], 16)
+            except Exception:
+                continue
+            items.append((page_i, sub_i, val_u32))
+
+        if not items:
+            QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'No INPUT MIXER map entries found to send')
+            return
+
+        port = auto_detect_port()
+        if not port:
+            QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'No device found (auto-detect failed)')
+            return
+        try:
+            link = CdcLink(port)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Input Mixer', f'Failed to open {port}: {e}')
+            return
+
+        try:
+            # Build one payload for all 4 mixer words
+            payload = bytearray()
+            payload.append(0x4A)  # i2c7 (ignored by fw)
+            cur_page = None
+            for page_i, sub_i, val_u32 in items:
+                if page_i != cur_page:
+                    payload.append(0xFD); payload.append(page_i & 0xFF)
+                    cur_page = page_i
+                payload.append(0x80 | (sub_i & 0x7F))
+                payload.append((val_u32 >> 24) & 0xFF)
+                payload.append((val_u32 >> 16) & 0xFF)
+                payload.append((val_u32 >> 8) & 0xFF)
+                payload.append(val_u32 & 0xFF)
+            ok, lines = link.jwrb_with_log(TYPE_COEFF, REC_INPUT_MIXER, bytes(payload))
+            if ok:
+                applies = [ln for ln in lines if ln.startswith('OK APPLY') or ln.startswith('ERR APPLY')]
+                msg = 'Input Mixer saved + applied'
+                if applies:
+                    msg += "\n\n" + "\n".join(applies)
+                QtWidgets.QMessageBox.information(self, 'Input Mixer', msg)
+            else:
+                QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'Journal write failed')
+        finally:
+            try:
+                link.close()
+            except Exception:
+                pass
