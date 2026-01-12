@@ -3,7 +3,8 @@ from PySide6 import QtWidgets, QtCore, QtGui
 
 from .util import q_to_hex_twos
 from ..device_interface.cdc_link import CdcLink, auto_detect_port
-from ..device_interface.record_ids import TYPE_COEFF, REC_MIX_GAIN
+from ..device_interface.record_ids import TYPE_COEFF, TYPE_APP_STATE, REC_MIX_GAIN, REC_STATE_MIXGAIN
+from ..device_interface.state_sidecar import pack_q97_values
 from pathlib import Path
 import json as _json
 
@@ -87,6 +88,21 @@ class MixGainAdjustTab(QtWidgets.QWidget):
         vright.addWidget(self.btn_send)
         root.addWidget(right, 1)
 
+        self._refresh_hex()
+
+    # ---------------- State (Save/Load) ----------------
+    def to_state_dict(self) -> dict:
+        return {name: float(self._spins[name].value()) for name in self.NAMES.keys()}
+
+    def apply_state_dict(self, d: dict | None):
+        if not d:
+            return
+        for name, spin in self._spins.items():
+            if name in d:
+                try:
+                    spin.setValue(float(d[name]))
+                except Exception:
+                    pass
         self._refresh_hex()
 
     def _q923_hex(self, v: float) -> str:
@@ -178,6 +194,13 @@ class MixGainAdjustTab(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.information(self, 'Mix/Gain', msg)
             else:
                 QtWidgets.QMessageBox.warning(self, 'Mix/Gain', 'Journal write failed')
+            # Sidecar
+            try:
+                order = list(self.NAMES.keys())
+                side = pack_q97_values(order, self.to_state_dict())
+                _ok2, _ = link.jwrb_with_log(TYPE_APP_STATE, REC_STATE_MIXGAIN, side)
+            except Exception:
+                pass
         finally:
             try:
                 link.close()

@@ -14,11 +14,14 @@ from .util import mk_dspin, row_color, build_plot, q_to_hex_twos
 from ..device_interface.cdc_link import CdcLink, auto_detect_port
 from ..device_interface.record_ids import (
     TYPE_COEFF,
+    TYPE_APP_STATE,
     REC_XO_A, REC_XO_B, REC_PHASE, REC_OUT_GAINS,
+    REC_STATE_XO,
 )
 from pathlib import Path
 import re as _re
 import json as _json
+from ..device_interface.state_sidecar import pack_xo_state
 
 
 class CrossoverTab(QtWidgets.QWidget):
@@ -275,6 +278,82 @@ class CrossoverTab(QtWidgets.QWidget):
             self._update_xo_plots()
             self._update_delay_labels()
             self._update_gain_labels()
+
+    # ---------------- State (Save/Load) ----------------
+    def _row_state(self, table: QtWidgets.QTableWidget, row: int) -> dict:
+        def _txt(cb: QtWidgets.QComboBox | None) -> str:
+            return cb.currentText() if cb is not None else ""
+        cb_mode = table.cellWidget(row, 1)
+        cb_topo = table.cellWidget(row, 2)
+        spin_fc = table.cellWidget(row, 3)
+        spin_q  = table.cellWidget(row, 4)
+        spin_rp = table.cellWidget(row, 5)
+        return {
+            "mode": _txt(cb_mode),
+            "topology": _txt(cb_topo),
+            "f0": float(spin_fc.value()) if spin_fc is not None else 2000.0,
+            "q": float(spin_q.value()) if spin_q is not None else 0.707,
+            # Ripple/Q2nd/Gain depending on mode; store as ripple_db generically
+            "ripple_db": float(spin_rp.value()) if spin_rp is not None else 0.5,
+        }
+
+    def to_state_dict(self) -> dict:
+        """Return dict with A/B arrays and misc settings (invert/delay/gain)."""
+        A = [self._row_state(self.table_xo_A, r) for r in range(self.table_xo_A.rowCount())]
+        B = [self._row_state(self.table_xo_B, r) for r in range(self.table_xo_B.rowCount())]
+        misc = {
+            "invertA": bool(self.chk_xo_pol_A.isChecked()),
+            "invertB": bool(self.chk_xo_pol_B.isChecked()),
+            "delayA": int(self.spin_delay_A.value()),
+            "delayB": int(self.spin_delay_B.value()),
+            "gainA_db": float(self.spin_gain_A.value()),
+            "gainB_db": float(self.spin_gain_B.value()),
+        }
+        return {"A": A, "B": B, "misc": misc}
+
+    def _apply_row_state(self, table: QtWidgets.QTableWidget, row: int, ent: dict):
+        ent = ent or {}
+        def _set_cb_text(cb: QtWidgets.QComboBox | None, text: str):
+            if cb is None:
+                return
+            # Exact match only
+            for i in range(cb.count()):
+                if cb.itemText(i) == text:
+                    cb.setCurrentIndex(i)
+                    return
+        _set_cb_text(table.cellWidget(row, 1), str(ent.get("mode", "")))
+        _set_cb_text(table.cellWidget(row, 2), str(ent.get("topology", "")))
+        def _setspin(col: int, val):
+            try:
+                w = table.cellWidget(row, col)
+                if w is not None and val is not None:
+                    w.setValue(float(val))
+            except Exception:
+                pass
+        _setspin(3, ent.get("f0"))
+        _setspin(4, ent.get("q"))
+        _setspin(5, ent.get("ripple_db"))
+
+    def apply_state_dict(self, xo_dict: dict | None):
+        if not xo_dict:
+            return
+        arrA = xo_dict.get("A") or []
+        arrB = xo_dict.get("B") or []
+        for r, ent in enumerate(arrA[:self.table_xo_A.rowCount()]):
+            self._apply_row_state(self.table_xo_A, r, ent)
+        for r, ent in enumerate(arrB[:self.table_xo_B.rowCount()]):
+            self._apply_row_state(self.table_xo_B, r, ent)
+        misc = xo_dict.get("misc") or {}
+        try:
+            self.chk_xo_pol_A.setChecked(bool(misc.get("invertA", False)))
+            self.chk_xo_pol_B.setChecked(bool(misc.get("invertB", False)))
+            self.spin_delay_A.setValue(int(misc.get("delayA", 0)))
+            self.spin_delay_B.setValue(int(misc.get("delayB", 0)))
+            self.spin_gain_A.setValue(float(misc.get("gainA_db", 0.0)))
+            self.spin_gain_B.setValue(float(misc.get("gainB_db", 0.0)))
+        except Exception:
+            pass
+        self._update_xo_plots()
 
     def _on_delay_changed(self, *_):
         # Update labels and plots (phase of electrical sum changes)
@@ -739,6 +818,13 @@ class CrossoverTab(QtWidgets.QWidget):
                 sent += 1
                 if not ok:
                     errs += 1
+            # Sidecar: XO A/B + misc
+            try:
+                xo_state = self.to_state_dict()
+                side = pack_xo_state(xo_state, int(self._fs))
+                _ok2, _ = link.jwrb_with_log(TYPE_APP_STATE, REC_STATE_XO, side)
+            except Exception:
+                pass
             if errs == 0 and sent > 0:
                 msg = 'Crossover coefficients saved + applied'
                 if apply_logs:

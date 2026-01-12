@@ -3,7 +3,8 @@ from PySide6 import QtWidgets, QtCore, QtGui
 
 from .util import q_to_hex_twos
 from ..device_interface.cdc_link import CdcLink, auto_detect_port
-from ..device_interface.record_ids import TYPE_COEFF, REC_OUT_GAINS
+from ..device_interface.record_ids import TYPE_COEFF, TYPE_APP_STATE, REC_OUT_GAINS, REC_STATE_XBAR
+from ..device_interface.state_sidecar import pack_q97_values
 from pathlib import Path
 import json as _json
 
@@ -110,6 +111,21 @@ class OutputCrossbarTab(QtWidgets.QWidget):
 
         self._refresh_hex()
 
+    # ---------------- State (Save/Load) ----------------
+    def to_state_dict(self) -> dict:
+        return {name: float(self._spins[name].value()) for name in self.NAMES}
+
+    def apply_state_dict(self, d: dict | None):
+        if not d:
+            return
+        for name, spin in self._spins.items():
+            if name in d:
+                try:
+                    spin.setValue(float(d[name]))
+                except Exception:
+                    pass
+        self._refresh_hex()
+
     def _q923_hex(self, v: float) -> str:
         return q_to_hex_twos(float(v), 23)
 
@@ -197,9 +213,15 @@ class OutputCrossbarTab(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.information(self, 'Output Cross Bar', msg)
             else:
                 QtWidgets.QMessageBox.warning(self, 'Output Cross Bar', 'Journal write failed')
+            # Sidecar
+            try:
+                order = list(self.NAMES)
+                side = pack_q97_values(order, self.to_state_dict())
+                _ok2, _ = link.jwrb_with_log(TYPE_APP_STATE, REC_STATE_XBAR, side)
+            except Exception:
+                pass
         finally:
             try:
                 link.close()
             except Exception:
                 pass
-

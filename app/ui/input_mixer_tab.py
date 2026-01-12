@@ -4,7 +4,8 @@ import math
 
 from .util import mk_dspin, q_to_hex_twos
 from ..device_interface.cdc_link import CdcLink, auto_detect_port
-from ..device_interface.record_ids import TYPE_COEFF, REC_INPUT_MIXER
+from ..device_interface.record_ids import TYPE_COEFF, TYPE_APP_STATE, REC_INPUT_MIXER, REC_STATE_MIXER
+from ..device_interface.state_sidecar import pack_q97_values
 from pathlib import Path
 import json as _json
 
@@ -145,6 +146,30 @@ class InputMixerTab(QtWidgets.QWidget):
 
         self._refresh_hex()
 
+    # ---------------- State (Save/Load) ----------------
+    def to_state_dict(self) -> dict:
+        return {
+            'LefttoLeft': float(self.spin_In1_to_A.value()),
+            'RighttoLeft': float(self.spin_In2_to_A.value()),
+            'LefttoRight': float(self.spin_In1_to_B.value()),
+            'RighttoRight': float(self.spin_In2_to_B.value()),
+        }
+
+    def apply_state_dict(self, d: dict | None):
+        if not d:
+            return
+        def _set(name: str, spin: QtWidgets.QDoubleSpinBox):
+            if name in d and spin is not None:
+                try:
+                    spin.setValue(float(d[name]))
+                except Exception:
+                    pass
+        _set('LefttoLeft', self.spin_In1_to_A)
+        _set('RighttoLeft', self.spin_In2_to_A)
+        _set('LefttoRight', self.spin_In1_to_B)
+        _set('RighttoRight', self.spin_In2_to_B)
+        self._refresh_hex()
+
     def _q923_hex(self, v: float) -> str:
         # 9.23 signed => 23 fractional bits
         return q_to_hex_twos(float(v), 23)
@@ -258,6 +283,13 @@ class InputMixerTab(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.information(self, 'Input Mixer', msg)
             else:
                 QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'Journal write failed')
+            # Sidecar
+            try:
+                order = ['LefttoLeft','RighttoLeft','LefttoRight','RighttoRight']
+                side = pack_q97_values(order, self.to_state_dict())
+                _ok2, _ = link.jwrb_with_log(TYPE_APP_STATE, REC_STATE_MIXER, side)
+            except Exception:
+                pass
         finally:
             try:
                 link.close()

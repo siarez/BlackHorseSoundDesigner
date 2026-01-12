@@ -21,13 +21,32 @@ class GeneralTab(QtWidgets.QWidget):
 
         info = QtWidgets.QLabel(
             "Utilities for device bring-up and recovery.\n"
-            "Erase EEPROM clears the entire on-board journal (all records)."
         )
         info.setWordWrap(True)
         root.addWidget(info)
 
+        # Load From Device helper (reads UI state from sidecar records only)
+        load_info = QtWidgets.QLabel(
+            "Load From Device reads saved UI settings from the device's memory "
+            "It does not program the DSP; it only updates the app's UI to reflect the connected device's configs."
+        )
+        load_info.setWordWrap(True)
+        root.addWidget(load_info)
+
+        self.btn_load_from_device = QtWidgets.QPushButton("Load From Device")
+        self.btn_load_from_device.setToolTip(
+            "Read configs from the device and apply to UI"
+        )
+        self.btn_load_from_device.clicked.connect(self._on_load_from_device)
+        root.addWidget(self.btn_load_from_device)
+
+        info = QtWidgets.QLabel(
+            "Warning: This erases EEPROM clears the entire on-board DSP and ADC configs."
+        )
+        info.setWordWrap(True)
+        root.addWidget(info)
         self.btn_erase = QtWidgets.QPushButton("Erase EEPROM (Journal)")
-        self.btn_erase.setToolTip("Fills the whole 24C256 with 0xFF via firmware !fill command")
+        self.btn_erase.setToolTip("Fills the whole 24C256 with 0xFF")
         self.btn_erase.clicked.connect(self._on_erase)
         root.addWidget(self.btn_erase)
 
@@ -117,3 +136,13 @@ class GeneralTab(QtWidgets.QWidget):
             pass
         self.btn_erase.setEnabled(True)
 
+    def _on_load_from_device(self):
+        # Delegate to MainWindow's implementation if available
+        mw = self.parent()
+        try:
+            if mw and hasattr(mw, "_on_load_from_device"):
+                mw._on_load_from_device()  # type: ignore[attr-defined]
+            else:
+                QtWidgets.QMessageBox.information(self, 'Load From Device', 'Not available in this context.')
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Load From Device', str(e))

@@ -18,7 +18,7 @@ def _hex_u32(n: int) -> str:
 
 
 def export_pf5_from_ui(parent: QtWidgets.QWidget, xo: CrossoverTab,
-                       ref_jsonl: Path | str = Path('app/eqcore/maps/shabrang_tas3261.jsonl'),
+                       ref_jsonl: Path | str = Path('app/eqcore/maps/shabrang_tas3251.jsonl'),
                        out_dir: Path | str = Path('app/exports')) -> Path | None:
     """Export a PF5 JSONL by overlaying UI values onto the reference map.
 

@@ -13,8 +13,11 @@ from .util import mk_dspin, row_color, build_plot, q_to_hex_twos
 from ..device_interface.cdc_link import CdcLink, auto_detect_port
 from ..device_interface.record_ids import (
     TYPE_COEFF,
+    TYPE_APP_STATE,
     REC_EQ_L, REC_INTGAIN_L, REC_EQ_R, REC_INTGAIN_R,
+    REC_STATE_EQ,
 )
+from ..device_interface.state_sidecar import pack_eq_state
 
 
 class EqTab(QtWidgets.QWidget):
@@ -73,6 +76,57 @@ class EqTab(QtWidgets.QWidget):
             from .util import apply_viewbox_limits
             apply_viewbox_limits(self.plot, self._fs)
             self._update_plot()
+
+    # ---------------- State (Save/Load) ----------------
+    def to_state_dict(self) -> list[dict]:
+        """Return list of 14 EQ section dicts with type/f0/q/gain_db.
+        'type' is saved as the ComboBox text for exact matching on load.
+        """
+        out: list[dict] = []
+        n = self.table.rowCount()
+        for row in range(n):
+            p = self._params_from_row(row)
+            cb = self.table.cellWidget(row, 1)
+            ttext = cb.currentText() if cb is not None else ""
+            out.append({
+                "type": ttext,
+                "f0": float(p.f0),
+                "q": float(p.q),
+                "gain_db": float(p.gain_db),
+            })
+        return out
+
+    def apply_state_dict(self, items: list[dict] | None):
+        """Apply a list of EQ section dicts (len<=14). Missing entries are ignored.
+        Keys: type (FilterType name), f0, q, gain_db.
+        """
+        if not items:
+            return
+        n = min(len(items), self.table.rowCount())
+        for row in range(n):
+            ent = items[row] or {}
+            # Type: exact text match only
+            ttext = str(ent.get("type", "") or "")
+            cb = self.table.cellWidget(row, 1)
+            if cb is not None and ttext:
+                for idx in range(cb.count()):
+                    if cb.itemText(idx) == ttext:
+                        cb.setCurrentIndex(idx)
+                        break
+            # Scalars
+            def _setspin(col: int, val: float | None):
+                if val is None:
+                    return
+                w = self.table.cellWidget(row, col)
+                try:
+                    w.setValue(float(val))
+                except Exception:
+                    pass
+            _setspin(2, ent.get("f0"))
+            _setspin(3, ent.get("q"))
+            _setspin(4, ent.get("gain_db"))
+        # Refresh visuals
+        self._update_plot()
 
     def _build_readout_group(self) -> QtWidgets.QGroupBox:
         gb = QtWidgets.QGroupBox("Selected Filters Coeffs (a0=1)")
@@ -451,6 +505,13 @@ class EqTab(QtWidgets.QWidget):
                 ok, pre_lines = link.jwrb_with_log(TYPE_COEFF, rec_id, bytes(payload))
                 if not ok:
                     errs += 1
+            # Also write compact sidecar (0x53) for UI state
+            try:
+                side = pack_eq_state(self.to_state_dict(), int(self._fs))
+                _ok2, _ = link.jwrb_with_log(TYPE_APP_STATE, REC_STATE_EQ, side)
+                # do not count sidecar failure against coeff apply; it's non-critical
+            except Exception:
+                pass
             if errs == 0:
                 QtWidgets.QMessageBox.information(self, 'EQ', 'EQ coefficients saved + applied')
             else:

@@ -15,6 +15,7 @@ Usage:
 
 # Journal type for 32-bit coefficient streams (book 0x8C):
 TYPE_COEFF: int = 0x52
+TYPE_APP_STATE: int = 0x53
 
 # Reserved IDs (unique per feature/section)
 
@@ -35,3 +36,10 @@ REC_INPUT_MIXER: int = 0x10    # INPUT MIXER (LefttoLeft/RighttoLeft/LefttoRight
 
 # Future expansion: 0x11..0x1F reserved
 REC_MIX_GAIN: int = 0x11       # MIX/GAIN ADJUST (LefttoSub/RighttoSub/SubMixScratch*/BassMono*)
+
+# UI App State sidecar (type 0x53). Inert at boot; used for Load From Device.
+REC_STATE_EQ: int = 0x90
+REC_STATE_XO: int = 0x91
+REC_STATE_MIXER: int = 0x92
+REC_STATE_MIXGAIN: int = 0x93
+REC_STATE_XBAR: int = 0x94
