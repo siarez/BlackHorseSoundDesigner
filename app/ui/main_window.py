@@ -1,5 +1,5 @@
 from __future__ import annotations
-from PySide6 import QtWidgets
+from PySide6 import QtWidgets, QtCore
 
 from .eq_tab import EqTab
 from .crossover_tab import CrossoverTab
@@ -12,6 +12,7 @@ from .i2c_script_tab import I2cScriptTab
 from .mix_gain_adjust_tab import MixGainAdjustTab
 from .output_crossbar_tab import OutputCrossbarTab
 from .general_tab import GeneralTab
+from .level_meter import LevelMeterWidget
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, dev_mode: bool = False):
@@ -33,8 +34,41 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_load_from_device.setEnabled(True)
         self.act_load_from_device.triggered.connect(self._on_load_from_device)
 
-        tabs = QtWidgets.QTabWidget(self)
-        self.setCentralWidget(tabs)
+        # Central layout: tabs + right-side level meter
+        central = QtWidgets.QWidget(self)
+        h = QtWidgets.QHBoxLayout(central)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+
+        tabs = QtWidgets.QTabWidget(central)
+        h.addWidget(tabs, 1)
+
+        # Right panel with level meters
+        self.level_meter = LevelMeterWidget(central)
+        self.level_meter.setFixedWidth(120)
+        frame = QtWidgets.QFrame(central)
+        frame.setFrameShape(QtWidgets.QFrame.VLine)
+        frame.setFrameShadow(QtWidgets.QFrame.Sunken)
+        side = QtWidgets.QVBoxLayout()
+        side.setContentsMargins(6, 6, 6, 6)
+        side.setSpacing(0)
+        side_w = QtWidgets.QWidget(central)
+        side_w.setLayout(QtWidgets.QVBoxLayout())
+        side_w.layout().setContentsMargins(6, 6, 6, 6)
+        side_w.layout().addWidget(self.level_meter, 1)
+        # Compose right side: separator + meter
+        right = QtWidgets.QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(0)
+        right_w = QtWidgets.QWidget(central)
+        right_w.setLayout(QtWidgets.QHBoxLayout())
+        right_w.layout().setContentsMargins(0, 0, 0, 0)
+        right_w.layout().setSpacing(0)
+        right_w.layout().addWidget(frame)
+        right_w.layout().addWidget(self.level_meter)
+        h.addWidget(right_w, 0)
+
+        self.setCentralWidget(central)
 
         # General utilities (recovery, erase, etc.)
         self.general_tab = GeneralTab(self)
@@ -81,10 +115,74 @@ class MainWindow(QtWidgets.QMainWindow):
             act_export = tb.addAction('Export Config')
             act_export.triggered.connect(self._on_export)
 
+        # 5 Hz meter polling
+        self._meter_timer = QtCore.QTimer(self)
+        self._meter_timer.setInterval(200)
+        self._meter_timer.timeout.connect(self._poll_levels)
+        self._meter_timer.start()
+        self._meter_link = None
+
     def _on_export(self):
         out = export_pf5_from_ui(self, self.xo_tab)
         if out:
             QtWidgets.QMessageBox.information(self, 'Export', f'Wrote {out}')
+
+    # ---------------- Level meter polling ----------------
+    def _open_meter_link(self):
+        if self._meter_link is not None:
+            return True
+        try:
+            from ..device_interface.cdc_link import CdcLink, auto_detect_port
+            port = auto_detect_port()
+            if not port:
+                self.level_meter.set_hint('No device')
+                return False
+            self._meter_link = CdcLink(port)
+            self._meter_port = port
+            self.level_meter.set_hint(f'{port}')
+            return True
+        except Exception:
+            self._meter_link = None
+            self.level_meter.set_hint('No device')
+            return False
+
+    def _close_meter_link(self):
+        if self._meter_link is not None:
+            try:
+                self._meter_link.close()
+            except Exception:
+                pass
+            self._meter_link = None
+
+    def _poll_levels(self):
+        # Try to open link if needed
+        if not self._open_meter_link():
+            self.level_meter.set_levels(0.0, 0.0)
+            return
+        link = self._meter_link
+        try:
+            # Read ES9821 peak meters: 0xEE/0xED (ch1 MSB/LSB), 0xEF/0xF0 (ch2 MSB/LSB)
+            vEE = link.esr(0xEE)
+            vED = link.esr(0xED)
+            vEF = link.esr(0xEF)
+            vF0 = link.esr(0xF0)
+            if None in (vEE, vED, vEF, vF0):
+                raise RuntimeError('read error')
+            # According to observed behavior, MSB appears at ED/EF, LSB at EE/F0.
+            ch1 = ((int(vED) & 0xFF) << 8) | (int(vEE) & 0xFF)
+            ch2 = ((int(vEF) & 0xFF) << 8) | (int(vF0) & 0xFF)
+            l1 = max(0.0, min(1.0, ch1 / 65535.0))
+            l2 = max(0.0, min(1.0, ch2 / 65535.0))
+            self.level_meter.set_levels(l1, l2)
+            self.level_meter.set_values_text(str(ch1), str(ch2))
+            # Show port so user knows we are connected
+            self.level_meter.set_hint(getattr(self, '_meter_port', '') or '')
+        except Exception:
+            # On error, close and retry next tick; show hint
+            self._close_meter_link()
+            self.level_meter.set_levels(0.0, 0.0)
+            self.level_meter.set_values_text("ERR", "ERR")
+            self.level_meter.set_hint('No data')
 
     # ---------------- Save/Load State (JSON) ----------------
     def _gather_state(self) -> dict:
