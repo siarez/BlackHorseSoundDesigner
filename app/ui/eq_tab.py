@@ -9,7 +9,7 @@ from app.eqcore import (
     FilterType, BiquadParams, design_biquad,
     default_freq_grid, sos_response_db
 )
-from .util import mk_dspin, row_color, build_plot, q_to_hex_twos
+from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify
 from ..device_interface.cdc_link import CdcLink, auto_detect_port
 from ..device_interface.record_ids import (
     TYPE_COEFF,
@@ -513,7 +513,7 @@ class EqTab(QtWidgets.QWidget):
             except Exception:
                 pass
             if errs == 0:
-                QtWidgets.QMessageBox.information(self, 'EQ', 'EQ coefficients saved + applied')
+                notify(self, 'EQ coefficients saved + applied')
             else:
                 QtWidgets.QMessageBox.warning(self, 'EQ', f'Completed with {errs} journal write errors')
         finally:

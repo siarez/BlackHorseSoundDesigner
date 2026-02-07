@@ -141,9 +141,9 @@ class GeneralTab(QtWidgets.QWidget):
         self.btn_erase.setEnabled(True)
 
     def _on_load_from_device(self):
-        # Delegate to MainWindow's implementation if available
-        mw = self.parent()
+        # Delegate to main window's implementation
         try:
+            mw = self.window()
             if mw and hasattr(mw, "_on_load_from_device"):
                 mw._on_load_from_device()  # type: ignore[attr-defined]
             else:

@@ -258,6 +258,15 @@ def q_to_hex_twos_floor(v: float, frac_bits: int) -> str:
     u = x & 0xFFFFFFFF
     return f"0x{u:08X}"
 
+
+def notify(widget: QtWidgets.QWidget, text: str, timeout_ms: int = 4000):
+    """Show a transient notification via the parent window's status bar."""
+    if widget is None:
+        return
+    win = widget.window()
+    if win is not None and hasattr(win, "notify"):
+        win.notify(text, timeout_ms)
+
 def hex_twos_to_float(s: str, frac_bits: int) -> float:
     """Parse a 32-bit two's complement hex string to float with given frac bits.
 

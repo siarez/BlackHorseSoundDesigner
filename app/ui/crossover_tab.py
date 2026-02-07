@@ -10,7 +10,7 @@ from app.eqcore import (
     sos_response_complex, cascade_response_complex,
     design_first_order_lpf, design_first_order_hpf,
 )
-from .util import mk_dspin, row_color, build_plot, q_to_hex_twos
+from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify
 from ..device_interface.cdc_link import CdcLink, auto_detect_port
 from ..device_interface.record_ids import (
     TYPE_COEFF,
@@ -402,7 +402,16 @@ class CrossoverTab(QtWidgets.QWidget):
 
         # Mode
         cb_mode = QtWidgets.QComboBox()
-        cb_mode.addItems(["All-pass", "Phase shift 1st", "Phase shift 2nd", "Low-pass", "High-pass", "Peaking EQ"])  # add Peaking EQ
+        cb_mode.addItems([
+            "All-pass",
+            "Phase shift 1st",
+            "Phase shift 2nd",
+            "Low-pass",
+            "High-pass",
+            "Peaking EQ",
+            "Low Shelf",
+            "High Shelf",
+        ])
         cb_mode.currentIndexChanged.connect(lambda _=None, r=row, t=table: self._on_mode_changed(t, r))
         table.setCellWidget(row, 1, cb_mode)
 
@@ -461,11 +470,11 @@ class CrossoverTab(QtWidgets.QWidget):
         w_ripple = table.cellWidget(row, 5)
         if w_topo:
             # Topology disabled for All-pass and both Phase shift modes
-            # Also disabled for Peaking EQ
-            w_topo.setEnabled(not (is_ap or mode.startswith('phase shift') or mode.startswith('peaking')))
+            # Also disabled for Peaking EQ and Shelves
+            w_topo.setEnabled(not (is_ap or mode.startswith('phase shift') or mode.startswith('peaking') or mode.startswith('low shelf') or mode.startswith('high shelf')))
         if w_q:
             enable_q = False
-            if mode.startswith('peaking'):
+            if mode.startswith('peaking') or mode.startswith('low shelf') or mode.startswith('high shelf'):
                 enable_q = True
             elif (mode.startswith('low') or mode.startswith('high')):
                 cb_topo = table.cellWidget(row, 2)
@@ -486,8 +495,8 @@ class CrossoverTab(QtWidgets.QWidget):
                     w_ripple.setDecimals(2)
                 except Exception:
                     pass
-            elif mode.startswith('peaking'):
-                # Use Ripple control as Gain (dB) for Peaking EQ
+            elif mode.startswith('peaking') or mode.startswith('low shelf') or mode.startswith('high shelf'):
+                # Use Ripple control as Gain (dB) for Peaking EQ and Shelves
                 w_ripple.setEnabled(True)
                 w_ripple.setSuffix(" dB")
                 try:
@@ -544,6 +553,14 @@ class CrossoverTab(QtWidgets.QWidget):
                 # Peaking EQ: Gain dB from Ripple control; Q from Q column
                 gain_db = ripple_db
                 p = BiquadParams(typ=FilterType.PEAK, fs=self._fs, f0=fc, q=max(0.1, q_user), gain_db=gain_db)
+                sos = design_biquad(p)
+                if invert_polarity:
+                    sos.b0 = -sos.b0; sos.b1 = -sos.b1; sos.b2 = -sos.b2
+                return sos
+            if mode_l.startswith('low shelf') or mode_l.startswith('high shelf'):
+                gain_db = ripple_db
+                typ = FilterType.LSHELF if mode_l.startswith('low shelf') else FilterType.HSHELF
+                p = BiquadParams(typ=typ, fs=self._fs, f0=fc, q=max(0.1, q_user), gain_db=gain_db)
                 sos = design_biquad(p)
                 if invert_polarity:
                     sos.b0 = -sos.b0; sos.b1 = -sos.b1; sos.b2 = -sos.b2
@@ -828,10 +845,10 @@ class CrossoverTab(QtWidgets.QWidget):
             if errs == 0 and sent > 0:
                 msg = 'Crossover coefficients saved + applied'
                 if apply_logs:
-                    msg += "\n\n" + "\n".join(apply_logs)
-                QtWidgets.QMessageBox.information(self, 'Crossover', msg)
+                    msg += " — " + " | ".join(apply_logs)
+                notify(self, msg)
             elif sent == 0:
-                QtWidgets.QMessageBox.warning(self, 'Crossover', 'Nothing was sent')
+                notify(self, 'Crossover: nothing was sent')
             else:
                 msg = f'Completed with {errs} journal write errors'
                 if apply_logs:

@@ -15,13 +15,14 @@ from .general_tab import GeneralTab
 from .level_meter import LevelMeterWidget
 
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self, dev_mode: bool = False):
+    def __init__(self, dev_mode: bool = False, show_meter: bool = False):
         super().__init__()
         self._dev_mode = bool(dev_mode)
+        self._show_meter = bool(show_meter)
         self.setWindowTitle("Black Horse Sound Designer")
         self.resize(1100, 700)
 
-        # Menu bar: File -> Save/Load State, Load From Device (Phase 2)
+        # Menu bar + status bar
         mbar = self.menuBar()
         m_file = mbar.addMenu("File")
         act_save = m_file.addAction("Save State…")
@@ -34,73 +35,63 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_load_from_device.setEnabled(True)
         self.act_load_from_device.triggered.connect(self._on_load_from_device)
 
-        # Central layout: tabs + right-side level meter
-        central = QtWidgets.QWidget(self)
-        h = QtWidgets.QHBoxLayout(central)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(0)
-
-        tabs = QtWidgets.QTabWidget(central)
-        h.addWidget(tabs, 1)
-
-        # Right panel with level meters
-        self.level_meter = LevelMeterWidget(central)
-        self.level_meter.setFixedWidth(120)
-        frame = QtWidgets.QFrame(central)
-        frame.setFrameShape(QtWidgets.QFrame.VLine)
-        frame.setFrameShadow(QtWidgets.QFrame.Sunken)
-        side = QtWidgets.QVBoxLayout()
-        side.setContentsMargins(6, 6, 6, 6)
-        side.setSpacing(0)
-        side_w = QtWidgets.QWidget(central)
-        side_w.setLayout(QtWidgets.QVBoxLayout())
-        side_w.layout().setContentsMargins(6, 6, 6, 6)
-        side_w.layout().addWidget(self.level_meter, 1)
-        # Compose right side: separator + meter
-        right = QtWidgets.QVBoxLayout()
-        right.setContentsMargins(0, 0, 0, 0)
-        right.setSpacing(0)
-        right_w = QtWidgets.QWidget(central)
-        right_w.setLayout(QtWidgets.QHBoxLayout())
-        right_w.layout().setContentsMargins(0, 0, 0, 0)
-        right_w.layout().setSpacing(0)
-        right_w.layout().addWidget(frame)
-        right_w.layout().addWidget(self.level_meter)
-        h.addWidget(right_w, 0)
-
-        self.setCentralWidget(central)
+        # Central: either tabs-only, or tabs + right-side meter panel
+        if self._show_meter:
+            central = QtWidgets.QWidget(self)
+            h = QtWidgets.QHBoxLayout(central)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(0)
+            tabs = QtWidgets.QTabWidget(central)
+            h.addWidget(tabs, 1)
+            # Right panel with level meters
+            self.level_meter = LevelMeterWidget(central)
+            self.level_meter.setFixedWidth(120)
+            frame = QtWidgets.QFrame(central)
+            frame.setFrameShape(QtWidgets.QFrame.VLine)
+            frame.setFrameShadow(QtWidgets.QFrame.Sunken)
+            right_w = QtWidgets.QWidget(central)
+            right_w.setLayout(QtWidgets.QHBoxLayout())
+            right_w.layout().setContentsMargins(0, 0, 0, 0)
+            right_w.layout().setSpacing(0)
+            right_w.layout().addWidget(frame)
+            right_w.layout().addWidget(self.level_meter)
+            h.addWidget(right_w, 0)
+            self.setCentralWidget(central)
+        else:
+            tabs = QtWidgets.QTabWidget(self)
+            self.setCentralWidget(tabs)
 
         # General utilities (recovery, erase, etc.)
-        self.general_tab = GeneralTab(self)
+        self.general_tab = GeneralTab(tabs)
         tabs.addTab(self.general_tab, "General")
 
         # Add tabs in process-flow order: Input Mixer first, then EQ, then Crossover
-        self.mixer_tab = InputMixerTab(self)
+        self.mixer_tab = InputMixerTab(tabs)
         tabs.addTab(self.mixer_tab, "Input Mixer")
 
-        self.eq_tab = EqTab(self)
+        self.eq_tab = EqTab(tabs)
         tabs.addTab(self.eq_tab, "EQ")
 
-        self.xo_tab = CrossoverTab(self)
+        self.xo_tab = CrossoverTab(tabs)
         tabs.addTab(self.xo_tab, "Crossover")
 
-        self.mix_gain_tab = MixGainAdjustTab(self)
+        self.mix_gain_tab = MixGainAdjustTab(tabs)
         tabs.addTab(self.mix_gain_tab, "Mix/Gain Adjust")
 
-        self.xbar_tab = OutputCrossbarTab(self)
+        self.xbar_tab = OutputCrossbarTab(tabs)
         tabs.addTab(self.xbar_tab, "Output Cross Bar")
 
         if self._dev_mode:
-            self.coef_tab = CoefCheckTab(self)
+            self.coef_tab = CoefCheckTab(tabs)
             tabs.addTab(self.coef_tab, "Coef Check")
 
-            self.journal_tab = JournalTab(self)
+            self.journal_tab = JournalTab(tabs)
             tabs.addTab(self.journal_tab, "Device Journal")
 
-            self.i2c_script_tab = I2cScriptTab(self)
+            self.i2c_script_tab = I2cScriptTab(tabs)
             tabs.addTab(self.i2c_script_tab, "I2C Script")
 
-            self.es9821_tab = Es9821Tab(self)
+            self.es9821_tab = Es9821Tab(tabs)
             tabs.addTab(self.es9821_tab, "ES9821 Regs")
 
 
@@ -115,17 +106,38 @@ class MainWindow(QtWidgets.QMainWindow):
             act_export = tb.addAction('Export Config')
             act_export.triggered.connect(self._on_export)
 
-        # 5 Hz meter polling
+        # Status bar for transient notifications
+        self._status_bar = self.statusBar()
+        if self._status_bar:
+            self._status_bar.setSizeGripEnabled(False)
+
+        # 5 Hz meter polling (temporarily disabled)
         self._meter_timer = QtCore.QTimer(self)
         self._meter_timer.setInterval(200)
         self._meter_timer.timeout.connect(self._poll_levels)
-        self._meter_timer.start()
         self._meter_link = None
+        self._meter_enabled = False
+        if hasattr(self, 'level_meter'):
+            try:
+                self.level_meter.set_hint('meter disabled')
+            except Exception:
+                pass
 
     def _on_export(self):
         out = export_pf5_from_ui(self, self.xo_tab)
         if out:
-            QtWidgets.QMessageBox.information(self, 'Export', f'Wrote {out}')
+            self.notify(f'Exported PF5 to {out}')
+
+    def notify(self, message: str, timeout_ms: int = 4000):
+        bar = getattr(self, '_status_bar', None)
+        if bar is not None:
+            # Basic heuristic: treat messages containing "error"/"failed"/"warn" as warnings.
+            lower = (message or "").lower()
+            if any(word in lower for word in ("error", "fail", "warning", "err ", "err.")):
+                bar.setStyleSheet("QStatusBar { color: #d32f2f; }")  # red
+            else:
+                bar.setStyleSheet("QStatusBar { color: #2e7d32; }")  # green
+            bar.showMessage(message, timeout_ms)
 
     # ---------------- Level meter polling ----------------
     def _open_meter_link(self):
@@ -155,8 +167,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._meter_link = None
 
     def _poll_levels(self):
+        # Temporarily disabled unless explicitly enabled
+        if not getattr(self, '_meter_enabled', False):
+            return
         # Try to open link if needed
-        if not self._open_meter_link():
+        if not hasattr(self, 'level_meter') or not self._open_meter_link():
             self.level_meter.set_levels(0.0, 0.0)
             return
         link = self._meter_link

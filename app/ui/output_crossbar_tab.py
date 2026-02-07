@@ -1,7 +1,7 @@
 from __future__ import annotations
 from PySide6 import QtWidgets, QtCore, QtGui
 
-from .util import q_to_hex_twos
+from .util import q_to_hex_twos, notify
 from ..device_interface.cdc_link import CdcLink, auto_detect_port
 from ..device_interface.record_ids import TYPE_COEFF, TYPE_APP_STATE, REC_OUT_GAINS, REC_STATE_XBAR
 from ..device_interface.state_sidecar import pack_q97_values
@@ -210,8 +210,8 @@ class OutputCrossbarTab(QtWidgets.QWidget):
                 applies = [ln for ln in lines if ln.startswith('OK APPLY') or ln.startswith('ERR APPLY')]
                 msg = 'Output Cross Bar saved + applied'
                 if applies:
-                    msg += "\n\n" + "\n".join(applies)
-                QtWidgets.QMessageBox.information(self, 'Output Cross Bar', msg)
+                    msg += " — " + " | ".join(applies)
+                notify(self, msg)
             else:
                 QtWidgets.QMessageBox.warning(self, 'Output Cross Bar', 'Journal write failed')
             # Sidecar

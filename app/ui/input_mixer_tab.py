@@ -2,7 +2,7 @@ from __future__ import annotations
 from PySide6 import QtWidgets, QtCore, QtGui
 import math
 
-from .util import mk_dspin, q_to_hex_twos
+from .util import mk_dspin, q_to_hex_twos, notify
 from ..device_interface.cdc_link import CdcLink, auto_detect_port
 from ..device_interface.record_ids import TYPE_COEFF, TYPE_APP_STATE, REC_INPUT_MIXER, REC_STATE_MIXER
 from ..device_interface.state_sidecar import pack_q97_values
@@ -279,8 +279,8 @@ class InputMixerTab(QtWidgets.QWidget):
                 applies = [ln for ln in lines if ln.startswith('OK APPLY') or ln.startswith('ERR APPLY')]
                 msg = 'Input Mixer saved + applied'
                 if applies:
-                    msg += "\n\n" + "\n".join(applies)
-                QtWidgets.QMessageBox.information(self, 'Input Mixer', msg)
+                    msg += " — " + " | ".join(applies)
+                notify(self, msg)
             else:
                 QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'Journal write failed')
             # Sidecar
