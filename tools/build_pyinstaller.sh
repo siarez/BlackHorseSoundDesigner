@@ -25,8 +25,16 @@ echo "[2/3] Building executable..."
 "${PYTHON_BIN}" -m PyInstaller --noconfirm --clean "${SPEC_FILE}"
 
 echo "[3/3] Done."
-echo "Output directory:"
-echo "  ${REPO_ROOT}/dist/BlackHorseSoundDesigner"
-echo
-echo "Run on this machine:"
-echo "  ${REPO_ROOT}/dist/BlackHorseSoundDesigner/BlackHorseSoundDesigner"
+if [[ -d "${REPO_ROOT}/dist/BlackHorseSoundDesigner.app" ]]; then
+  echo "Output app bundle:"
+  echo "  ${REPO_ROOT}/dist/BlackHorseSoundDesigner.app"
+  echo
+  echo "Run on this machine:"
+  echo "  open '${REPO_ROOT}/dist/BlackHorseSoundDesigner.app'"
+else
+  echo "Output directory:"
+  echo "  ${REPO_ROOT}/dist/BlackHorseSoundDesigner"
+  echo
+  echo "Run on this machine:"
+  echo "  ${REPO_ROOT}/dist/BlackHorseSoundDesigner/BlackHorseSoundDesigner"
+fi

@@ -8,6 +8,9 @@ from PyInstaller.utils.hooks import collect_submodules
 
 
 ROOT = Path(globals().get("SPECPATH", os.getcwd())).resolve()
+APP_NAME = "BlackHorseSoundDesigner"
+APP_DISPLAY_NAME = "Black Horse Sound Designer"
+APP_BUNDLE_ID = "com.blackhorseaudio.sounddesigner"
 ICON_FILE = ROOT / "app" / "assets" / "icons" / ("horse_logo.icns" if sys.platform == "darwin" else "horse_logo.ico")
 ICON_PATH = str(ICON_FILE) if ICON_FILE.exists() else None
 
@@ -40,7 +43,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="BlackHorseSoundDesigner",
+    name=APP_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -56,5 +59,18 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="BlackHorseSoundDesigner",
+    name=APP_NAME,
 )
+
+if sys.platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name=f"{APP_NAME}.app",
+        icon=ICON_PATH,
+        bundle_identifier=APP_BUNDLE_ID,
+        info_plist={
+            "CFBundleName": APP_NAME,
+            "CFBundleDisplayName": APP_DISPLAY_NAME,
+            "NSHighResolutionCapable": True,
+        },
+    )
