@@ -1,15 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
 
 ROOT = Path(globals().get("SPECPATH", os.getcwd())).resolve()
+ICON_FILE = ROOT / "app" / "assets" / "icons" / ("horse_logo.icns" if sys.platform == "darwin" else "horse_logo.ico")
+ICON_PATH = str(ICON_FILE) if ICON_FILE.exists() else None
 
 datas = [
     (str(ROOT / "app" / "eqcore" / "maps"), "app/eqcore/maps"),
+    (str(ROOT / "app" / "assets"), "app/assets"),
     (str(ROOT / "example_configs"), "example_configs"),
     (str(ROOT / "docs"), "docs"),
 ]
@@ -42,6 +46,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
+    icon=ICON_PATH,
 )
 
 coll = COLLECT(
