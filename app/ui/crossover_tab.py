@@ -11,7 +11,8 @@ from app.eqcore import (
     design_first_order_lpf, design_first_order_hpf,
 )
 from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify
-from ..device_interface.cdc_link import CdcLink, auto_detect_port
+from ..device_interface.cdc_link import auto_detect_port
+from ..device_interface.device_link_manager import get_device_link_manager
 from ..device_interface.record_ids import (
     TYPE_COEFF,
     TYPE_APP_STATE,
@@ -27,6 +28,7 @@ from ..device_interface.state_sidecar import pack_xo_state
 class CrossoverTab(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
+        self._link_mgr = get_device_link_manager()
 
         self._xo_num_sections = 5
 
@@ -797,13 +799,7 @@ class CrossoverTab(QtWidgets.QWidget):
         if not port:
             QtWidgets.QMessageBox.warning(self, 'Crossover', 'No device found (auto-detect failed)')
             return
-        try:
-            link = CdcLink(port)
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'Crossover', f'Failed to open {port}: {e}')
-            return
-
-        try:
+        def _send(link) -> tuple[int, int, list[str]]:
             errs = 0; sent = 0
             apply_logs: list[str] = []
             for sec_name, items in (("CROSS OVER BQs", items_A), ("SUB CROSS OVER BQs", items_B), ("PHASE OPTIMIZER", items_D), ("OUTPUT CROSS BAR", items_G)):
@@ -842,20 +838,23 @@ class CrossoverTab(QtWidgets.QWidget):
                 _ok2, _ = link.jwrb_with_log(TYPE_APP_STATE, REC_STATE_XO, side)
             except Exception:
                 pass
-            if errs == 0 and sent > 0:
-                msg = 'Crossover coefficients saved + applied'
-                if apply_logs:
-                    msg += " — " + " | ".join(apply_logs)
-                notify(self, msg)
-            elif sent == 0:
-                notify(self, 'Crossover: nothing was sent')
-            else:
-                msg = f'Completed with {errs} journal write errors'
-                if apply_logs:
-                    msg += "\n\n" + "\n".join(apply_logs)
-                QtWidgets.QMessageBox.warning(self, 'Crossover', msg)
-        finally:
-            try:
-                link.close()
-            except Exception:
-                pass
+            return errs, sent, apply_logs
+
+        try:
+            errs, sent, apply_logs = self._link_mgr.run(_send, port=port, auto=False)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Crossover', f'Failed to open {port}: {e}')
+            return
+
+        if errs == 0 and sent > 0:
+            msg = 'Crossover coefficients saved + applied'
+            if apply_logs:
+                msg += " — " + " | ".join(apply_logs)
+            notify(self, msg)
+        elif sent == 0:
+            notify(self, 'Crossover: nothing was sent')
+        else:
+            msg = f'Completed with {errs} journal write errors'
+            if apply_logs:
+                msg += "\n\n" + "\n".join(apply_logs)
+            QtWidgets.QMessageBox.warning(self, 'Crossover', msg)

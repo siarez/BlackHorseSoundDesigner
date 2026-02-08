@@ -1,4 +1,7 @@
 from __future__ import annotations
+import math
+import os
+import time
 from PySide6 import QtWidgets, QtCore
 
 from .eq_tab import EqTab
@@ -13,12 +16,14 @@ from .mix_gain_adjust_tab import MixGainAdjustTab
 from .output_crossbar_tab import OutputCrossbarTab
 from .general_tab import GeneralTab
 from .level_meter import LevelMeterWidget
+from ..device_interface.device_link_manager import get_device_link_manager
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, dev_mode: bool = False, show_meter: bool = False):
         super().__init__()
         self._dev_mode = bool(dev_mode)
         self._show_meter = bool(show_meter)
+        self._link_mgr = get_device_link_manager()
         self.setWindowTitle("Black Horse Sound Designer")
         self.resize(1100, 700)
 
@@ -111,17 +116,42 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._status_bar:
             self._status_bar.setSizeGripEnabled(False)
 
-        # 5 Hz meter polling (temporarily disabled)
+        # 20 Hz meter polling
         self._meter_timer = QtCore.QTimer(self)
-        self._meter_timer.setInterval(200)
+        self._meter_timer.setInterval(50)
         self._meter_timer.timeout.connect(self._poll_levels)
-        self._meter_link = None
-        self._meter_enabled = False
+        # 30 FPS display decay/update
+        self._meter_anim_timer = QtCore.QTimer(self)
+        self._meter_anim_timer.setInterval(33)
+        self._meter_anim_timer.timeout.connect(self._tick_meter_decay)
+        self._meter_enabled = hasattr(self, 'level_meter')
+        self._meter_level_1 = 0.0
+        self._meter_level_2 = 0.0
+        self._meter_raw_1 = 0
+        self._meter_raw_2 = 0
+        self._meter_decay_db_per_s = 6.0
+        self._meter_min_dbfs = -60.0
+        self._meter_max_dbfs = 0.0
+        self._meter_dbfs_offset = float(os.environ.get("BH_METER_DBFS_OFFSET", "0.0") or 0.0)
+        self._meter_calibration_mode = (os.environ.get("BH_METER_CAL_MODE", "0") or "").strip().lower() in {"1", "true", "yes", "on"}
+        self._meter_show_raw = (os.environ.get("BH_METER_SHOW_RAW", "0") or "").strip().lower() in {"1", "true", "yes", "on"}
+        self._meter_cal_smooth_s = max(0.0, float(os.environ.get("BH_METER_CAL_SMOOTH_S", "0.25") or 0.25))
+        self._meter_cal_disp_1 = 0.0
+        self._meter_cal_disp_2 = 0.0
+        self._meter_cal_last_s = time.monotonic()
+        self._meter_last_tick_s = time.monotonic()
         if hasattr(self, 'level_meter'):
             try:
-                self.level_meter.set_hint('meter disabled')
+                mode = "CAL" if self._meter_calibration_mode else "PEAK"
+                self.level_meter.set_hint(f"starting... [{mode}] (offset {self._meter_dbfs_offset:+.1f} dB)")
+                self.level_meter.set_scale_db(self._meter_min_dbfs, self._meter_max_dbfs)
+                self.level_meter.set_values_text(self._format_meter_text(float("-inf"), 0), self._format_meter_text(float("-inf"), 0))
             except Exception:
                 pass
+        if self._meter_enabled:
+            self._meter_timer.start()
+            if not self._meter_calibration_mode:
+                self._meter_anim_timer.start()
 
     def _on_export(self):
         out = export_pf5_from_ui(self, self.xo_tab)
@@ -139,65 +169,99 @@ class MainWindow(QtWidgets.QMainWindow):
                 bar.setStyleSheet("QStatusBar { color: #2e7d32; }")  # green
             bar.showMessage(message, timeout_ms)
 
-    # ---------------- Level meter polling ----------------
-    def _open_meter_link(self):
-        if self._meter_link is not None:
-            return True
-        try:
-            from ..device_interface.cdc_link import CdcLink, auto_detect_port
-            port = auto_detect_port()
-            if not port:
-                self.level_meter.set_hint('No device')
-                return False
-            self._meter_link = CdcLink(port)
-            self._meter_port = port
-            self.level_meter.set_hint(f'{port}')
-            return True
-        except Exception:
-            self._meter_link = None
-            self.level_meter.set_hint('No device')
-            return False
-
-    def _close_meter_link(self):
-        if self._meter_link is not None:
-            try:
-                self._meter_link.close()
-            except Exception:
-                pass
-            self._meter_link = None
-
     def _poll_levels(self):
-        # Temporarily disabled unless explicitly enabled
         if not getattr(self, '_meter_enabled', False):
             return
-        # Try to open link if needed
-        if not hasattr(self, 'level_meter') or not self._open_meter_link():
-            self.level_meter.set_levels(0.0, 0.0)
+        if not hasattr(self, 'level_meter'):
             return
-        link = self._meter_link
         try:
-            # Read ES9821 peak meters: 0xEE/0xED (ch1 MSB/LSB), 0xEF/0xF0 (ch2 MSB/LSB)
-            vEE = link.esr(0xEE)
-            vED = link.esr(0xED)
-            vEF = link.esr(0xEF)
-            vF0 = link.esr(0xF0)
-            if None in (vEE, vED, vEF, vF0):
-                raise RuntimeError('read error')
-            # According to observed behavior, MSB appears at ED/EF, LSB at EE/F0.
-            ch1 = ((int(vED) & 0xFF) << 8) | (int(vEE) & 0xFF)
-            ch2 = ((int(vEF) & 0xFF) << 8) | (int(vF0) & 0xFF)
-            l1 = max(0.0, min(1.0, ch1 / 65535.0))
-            l2 = max(0.0, min(1.0, ch2 / 65535.0))
-            self.level_meter.set_levels(l1, l2)
-            self.level_meter.set_values_text(str(ch1), str(ch2))
-            # Show port so user knows we are connected
-            self.level_meter.set_hint(getattr(self, '_meter_port', '') or '')
+            def _read_levels(link):
+                vEE = link.esr(0xEE)
+                vED = link.esr(0xED)
+                vEF = link.esr(0xEF)
+                vF0 = link.esr(0xF0)
+                if None in (vEE, vED, vEF, vF0):
+                    raise RuntimeError("read error")
+                # ES9821 peak readback words: CH1 = EE:ED, CH2 = F0:EF (MSB:LSB).
+                ch1 = ((int(vEE) & 0xFF) << 8) | (int(vED) & 0xFF)
+                ch2 = ((int(vF0) & 0xFF) << 8) | (int(vEF) & 0xFF)
+                return ch1, ch2
+
+            result = self._link_mgr.run_if_idle(_read_levels, auto=True, retry=False)
+            if result is None:
+                return
+            ch1, ch2 = result
+            self._meter_raw_1 = int(ch1)
+            self._meter_raw_2 = int(ch2)
+            p1 = max(0.0, min(1.0, int(ch1) / 65535.0))
+            p2 = max(0.0, min(1.0, int(ch2) / 65535.0))
+            if self._meter_calibration_mode:
+                # Direct mode for calibration: no app-side hold/decay.
+                if self._meter_cal_smooth_s > 0.0:
+                    now = time.monotonic()
+                    dt = max(0.001, min(0.5, now - self._meter_cal_last_s))
+                    self._meter_cal_last_s = now
+                    alpha = math.exp(-dt / self._meter_cal_smooth_s)
+                    self._meter_cal_disp_1 = (alpha * self._meter_cal_disp_1) + ((1.0 - alpha) * p1)
+                    self._meter_cal_disp_2 = (alpha * self._meter_cal_disp_2) + ((1.0 - alpha) * p2)
+                else:
+                    self._meter_cal_disp_1 = p1
+                    self._meter_cal_disp_2 = p2
+                self._meter_level_1 = self._meter_cal_disp_1
+                self._meter_level_2 = self._meter_cal_disp_2
+                dbfs_1 = self._amp_to_dbfs(self._meter_cal_disp_1) + self._meter_dbfs_offset
+                dbfs_2 = self._amp_to_dbfs(self._meter_cal_disp_2) + self._meter_dbfs_offset
+                self.level_meter.set_levels_db(dbfs_1, dbfs_2)
+                self.level_meter.set_values_text(
+                    self._format_meter_text(dbfs_1, self._meter_raw_1),
+                    self._format_meter_text(dbfs_2, self._meter_raw_2),
+                )
+            else:
+                self._meter_level_1 = max(self._meter_level_1, p1)
+                self._meter_level_2 = max(self._meter_level_2, p2)
+            port = self._link_mgr.current_port() or ""
+            mode = "CAL" if self._meter_calibration_mode else "PEAK"
+            self.level_meter.set_hint(f"{port} [{mode}] ({self._meter_dbfs_offset:+.1f} dB)")
         except Exception:
-            # On error, close and retry next tick; show hint
-            self._close_meter_link()
-            self.level_meter.set_levels(0.0, 0.0)
-            self.level_meter.set_values_text("ERR", "ERR")
             self.level_meter.set_hint('No data')
+
+    def _tick_meter_decay(self):
+        if not getattr(self, '_meter_enabled', False):
+            return
+        if not hasattr(self, 'level_meter'):
+            return
+        if self._meter_calibration_mode:
+            return
+        now = time.monotonic()
+        dt = max(0.0, min(0.25, now - self._meter_last_tick_s))
+        self._meter_last_tick_s = now
+        # Exponential decay in dB/second.
+        decay = 10.0 ** (-(self._meter_decay_db_per_s * dt) / 20.0)
+        self._meter_level_1 *= decay
+        self._meter_level_2 *= decay
+        dbfs_1 = self._amp_to_dbfs(self._meter_level_1) + self._meter_dbfs_offset
+        dbfs_2 = self._amp_to_dbfs(self._meter_level_2) + self._meter_dbfs_offset
+        self.level_meter.set_levels_db(dbfs_1, dbfs_2)
+        self.level_meter.set_values_text(
+            self._format_meter_text(dbfs_1, self._meter_raw_1),
+            self._format_meter_text(dbfs_2, self._meter_raw_2),
+        )
+
+    def _amp_to_dbfs(self, amp_norm: float) -> float:
+        return 20.0 * math.log10(max(0.0, float(amp_norm), 1e-9))
+
+    def _format_meter_text(self, dbfs: float, raw_code: int) -> str:
+        if dbfs <= -180.0:
+            base = "-inf dBFS"
+        else:
+            base = f"{dbfs:.1f} dBFS"
+        if not self._meter_show_raw:
+            return base
+        if dbfs <= -180.0:
+            base_short = "-inf"
+        else:
+            base_short = f"{dbfs:.1f}"
+        return f"S:{base_short}\nR:{int(raw_code)}"
 
     # ---------------- Save/Load State (JSON) ----------------
     def _gather_state(self) -> dict:
@@ -286,94 +350,77 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # Placeholder for Phase 2 (device sidecar read)
     def _on_load_from_device(self):
-        from ..device_interface.cdc_link import CdcLink, auto_detect_port
         from ..device_interface.record_ids import (
             TYPE_APP_STATE, REC_STATE_EQ, REC_STATE_XO, REC_STATE_MIXER, REC_STATE_MIXGAIN, REC_STATE_XBAR,
         )
         from ..device_interface.state_sidecar import (
             unpack_eq_state, unpack_xo_state, unpack_q97_values,
         )
-        port = auto_detect_port()
-        if not port:
-            QtWidgets.QMessageBox.warning(self, 'Load From Device', 'No device found (auto-detect failed)')
-            return
-        try:
-            link = CdcLink(port)
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'Load From Device', f'Failed to open {port}: {e}')
-            return
         applied = []
         try:
-            # EQ
-            try:
-                data = link.jrdb(TYPE_APP_STATE, REC_STATE_EQ)
-                if data:
-                    dec = unpack_eq_state(data)
-                    if dec.get('fs'):
-                        try:
-                            self.eq_tab.set_fs(float(dec['fs']))
-                        except Exception:
-                            pass
-                    self.eq_tab.apply_state_dict(dec.get('eq') or [])
-                    applied.append('EQ')
-            except Exception:
-                pass
-            # XO
-            try:
-                data = link.jrdb(TYPE_APP_STATE, REC_STATE_XO)
-                if data:
-                    dec = unpack_xo_state(data)
-                    if dec.get('fs'):
-                        try:
-                            self.xo_tab.set_fs(float(dec['fs']))
-                        except Exception:
-                            pass
-                    self.xo_tab.apply_state_dict({
-                        'A': dec.get('A', []),
-                        'B': dec.get('B', []),
-                        'misc': dec.get('misc', {}),
-                    })
-                    applied.append('XO')
-            except Exception:
-                pass
-            # Mixer
-            try:
-                data = link.jrdb(TYPE_APP_STATE, REC_STATE_MIXER)
-                if data:
-                    order = ['LefttoLeft','RighttoLeft','LefttoRight','RighttoRight']
-                    vals = unpack_q97_values(data, order)
-                    if vals:
-                        self.mixer_tab.apply_state_dict(vals)
-                        applied.append('Input Mixer')
-            except Exception:
-                pass
-            # Mix/Gain Adjust
-            try:
-                data = link.jrdb(TYPE_APP_STATE, REC_STATE_MIXGAIN)
-                if data:
-                    order = list(self.mix_gain_tab.NAMES.keys()) if hasattr(self.mix_gain_tab, 'NAMES') else []
-                    vals = unpack_q97_values(data, order)
-                    if vals:
-                        self.mix_gain_tab.apply_state_dict(vals)
-                        applied.append('Mix/Gain Adjust')
-            except Exception:
-                pass
-            # Output Cross Bar
-            try:
-                data = link.jrdb(TYPE_APP_STATE, REC_STATE_XBAR)
-                if data:
-                    order = list(self.xbar_tab.NAMES) if hasattr(self.xbar_tab, 'NAMES') else []
-                    vals = unpack_q97_values(data, order)
-                    if vals:
-                        self.xbar_tab.apply_state_dict(vals)
-                        applied.append('Output Cross Bar')
-            except Exception:
-                pass
-        finally:
-            try:
-                link.close()
-            except Exception:
-                pass
+            def _read_all(link):
+                return {
+                    'eq': link.jrdb(TYPE_APP_STATE, REC_STATE_EQ),
+                    'xo': link.jrdb(TYPE_APP_STATE, REC_STATE_XO),
+                    'mixer': link.jrdb(TYPE_APP_STATE, REC_STATE_MIXER),
+                    'mix_gain': link.jrdb(TYPE_APP_STATE, REC_STATE_MIXGAIN),
+                    'xbar': link.jrdb(TYPE_APP_STATE, REC_STATE_XBAR),
+                }
+
+            blobs = self._link_mgr.run(_read_all, auto=True)
+
+            data = blobs.get('eq')
+            if data:
+                dec = unpack_eq_state(data)
+                if dec.get('fs'):
+                    try:
+                        self.eq_tab.set_fs(float(dec['fs']))
+                    except Exception:
+                        pass
+                self.eq_tab.apply_state_dict(dec.get('eq') or [])
+                applied.append('EQ')
+
+            data = blobs.get('xo')
+            if data:
+                dec = unpack_xo_state(data)
+                if dec.get('fs'):
+                    try:
+                        self.xo_tab.set_fs(float(dec['fs']))
+                    except Exception:
+                        pass
+                self.xo_tab.apply_state_dict({
+                    'A': dec.get('A', []),
+                    'B': dec.get('B', []),
+                    'misc': dec.get('misc', {}),
+                })
+                applied.append('XO')
+
+            data = blobs.get('mixer')
+            if data:
+                order = ['LefttoLeft', 'RighttoLeft', 'LefttoRight', 'RighttoRight']
+                vals = unpack_q97_values(data, order)
+                if vals:
+                    self.mixer_tab.apply_state_dict(vals)
+                    applied.append('Input Mixer')
+
+            data = blobs.get('mix_gain')
+            if data:
+                order = list(self.mix_gain_tab.NAMES.keys()) if hasattr(self.mix_gain_tab, 'NAMES') else []
+                vals = unpack_q97_values(data, order)
+                if vals:
+                    self.mix_gain_tab.apply_state_dict(vals)
+                    applied.append('Mix/Gain Adjust')
+
+            data = blobs.get('xbar')
+            if data:
+                order = list(self.xbar_tab.NAMES) if hasattr(self.xbar_tab, 'NAMES') else []
+                vals = unpack_q97_values(data, order)
+                if vals:
+                    self.xbar_tab.apply_state_dict(vals)
+                    applied.append('Output Cross Bar')
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Load From Device', f'Failed to read device: {e}')
+            return
         if applied:
             QtWidgets.QMessageBox.information(self, 'Load From Device', 'Loaded: ' + ', '.join(applied))
         else:

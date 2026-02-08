@@ -3,15 +3,18 @@ from __future__ import annotations
 from typing import List, Tuple
 from PySide6 import QtWidgets
 
-from ..device_interface.cdc_link import CdcLink, auto_detect_port
+from ..device_interface.cdc_link import auto_detect_port, list_serial_ports
+from ..device_interface.device_link_manager import get_device_link_manager
 
 
 class I2cScriptTab(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._link: CdcLink | None = None
+        self._link_mgr = get_device_link_manager()
+        self._connected_port: str = ""
 
         self.port_combo = QtWidgets.QComboBox(self)
+        self.refresh_btn = QtWidgets.QPushButton("Refresh", self)
         self.auto_btn = QtWidgets.QPushButton("Auto-Detect", self)
         self.connect_btn = QtWidgets.QPushButton("Connect", self)
         self.run_btn = QtWidgets.QPushButton("Run Script", self)
@@ -27,6 +30,7 @@ class I2cScriptTab(QtWidgets.QWidget):
         top = QtWidgets.QHBoxLayout()
         top.addWidget(QtWidgets.QLabel("Port:"))
         top.addWidget(self.port_combo, 1)
+        top.addWidget(self.refresh_btn)
         top.addWidget(self.auto_btn)
         top.addWidget(self.connect_btn)
         top.addWidget(self.run_btn)
@@ -39,21 +43,51 @@ class I2cScriptTab(QtWidgets.QWidget):
         root.addWidget(QtWidgets.QLabel("Log:"))
         root.addWidget(self.output, 1)
 
+        self.refresh_btn.clicked.connect(self._on_refresh)
         self.auto_btn.clicked.connect(self._on_auto)
         self.connect_btn.clicked.connect(self._on_connect)
         self.run_btn.clicked.connect(self._on_run)
 
-        self._populate_ports()
+        self._populate_ports(auto_select=True)
+        self._apply_connection_state(False)
 
-    def _populate_ports(self):
+    def _apply_connection_state(self, connected: bool, port: str = ""):
+        self.connect_btn.setText("Disconnect" if connected else "Connect")
+        self.port_combo.setEnabled(not connected)
+        self.refresh_btn.setEnabled(not connected)
+        self.auto_btn.setEnabled(not connected)
+        if connected:
+            self.status_lbl.setText(f"Connected: {port}")
+        else:
+            self.status_lbl.setText("Disconnected")
+
+    def _populate_ports(self, auto_select: bool = False):
+        current = self.port_combo.itemData(self.port_combo.currentIndex()) if self.port_combo.currentIndex() >= 0 else ""
+        sel_index = -1
         self.port_combo.clear()
-        dev = auto_detect_port()
-        if dev:
-            self.port_combo.addItem(dev, dev)
+        ports = list_serial_ports()
+        for p in ports:
+            label = f"{p.get('device','')} — {p.get('product','') or p.get('description','')} ({p.get('manufacturer','')})"
+            self.port_combo.addItem(label, p.get('device', ''))
+        if auto_select:
+            dev = auto_detect_port()
+            if dev:
+                for i in range(self.port_combo.count()):
+                    if self.port_combo.itemData(i) == dev:
+                        sel_index = i
+                        break
+        elif current:
+            for i in range(self.port_combo.count()):
+                if self.port_combo.itemData(i) == current:
+                    sel_index = i
+                    break
+        if sel_index >= 0:
+            self.port_combo.setCurrentIndex(sel_index)
+        elif self.port_combo.count() > 0:
             self.port_combo.setCurrentIndex(0)
 
     def _ensure_link(self) -> bool:
-        if self._link is not None:
+        if self._connected_port:
             return True
         idx = self.port_combo.currentIndex()
         if idx < 0:
@@ -64,30 +98,31 @@ class I2cScriptTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "I2C", "Serial port is empty.")
             return False
         try:
-            self._link = CdcLink(dev)
-            self.status_lbl.setText(f"Connected: {dev}")
+            self._connected_port = self._link_mgr.connect(port=dev, auto=False)
+            self._apply_connection_state(True, self._connected_port)
             return True
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Connect", str(e))
-            self._link = None
+            self._connected_port = ""
+            self._apply_connection_state(False)
             return False
 
+    def _on_refresh(self):
+        self._populate_ports(auto_select=False)
+
     def _on_auto(self):
-        self._populate_ports()
+        self._populate_ports(auto_select=True)
 
     def _on_connect(self):
-        if self._link is None:
+        if not self._connected_port:
             self._ensure_link()
-            if self._link is not None:
-                self.connect_btn.setText("Disconnect")
         else:
             try:
-                self._link.close()
+                self._link_mgr.disconnect()
             except Exception:
                 pass
-            self._link = None
-            self.connect_btn.setText("Connect")
-            self.status_lbl.setText("Disconnected")
+            self._connected_port = ""
+            self._apply_connection_state(False)
 
     def _parse_script(self, text: str) -> List[Tuple[int,int,int,int]]:
         out: List[Tuple[int,int,int,int]] = []
@@ -120,23 +155,39 @@ class I2cScriptTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.information(self, "I2C", "No commands to run.")
             return
         self.output.clear()
-        ok_all = True
-        for ln, a, r, v in cmds:
-            # Accept sentinel v == -999 for reads
-            if a < 0 or r < 0 or (v < 0 and v != -999):
-                self.output.appendPlainText(f"Line {ln}: parse error")
-                ok_all = False
-                continue
-            if v == -999:
-                val = self._link.i2c_read(a, r)
-                if val is None:
-                    self.output.appendPlainText(f"Line {ln}: r {a:#x} {r:#x} -> ERR")
+        def _run_script(link) -> tuple[list[str], bool]:
+            out_lines: list[str] = []
+            ok_all = True
+            for ln, a, r, v in cmds:
+                # Accept sentinel v == -999 for reads.
+                if a < 0 or r < 0 or (v < 0 and v != -999):
+                    out_lines.append(f"Line {ln}: parse error")
                     ok_all = False
+                    continue
+                if v == -999:
+                    val = link.i2c_read(a, r)
+                    if val is None:
+                        out_lines.append(f"Line {ln}: r {a:#x} {r:#x} -> ERR")
+                        ok_all = False
+                    else:
+                        out_lines.append(f"Line {ln}: r {a:#x} {r:#x} -> OK 0x{val:02X}")
                 else:
-                    self.output.appendPlainText(f"Line {ln}: r {a:#x} {r:#x} -> OK 0x{val:02X}")
-            else:
-                ok = self._link.i2c_write(a, r, v)
-                self.output.appendPlainText(f"Line {ln}: w {a:#x} {r:#x} {v:#x} -> {'OK' if ok else 'ERR'}")
-                if not ok:
-                    ok_all = False
+                    ok = link.i2c_write(a, r, v)
+                    out_lines.append(f"Line {ln}: w {a:#x} {r:#x} {v:#x} -> {'OK' if ok else 'ERR'}")
+                    if not ok:
+                        ok_all = False
+            return out_lines, ok_all
+
+        try:
+            out_lines, ok_all = self._link_mgr.run(
+                _run_script,
+                port=self._connected_port,
+                auto=False,
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "I2C", f"Run failed:\n{e}")
+            return
+
+        for line in out_lines:
+            self.output.appendPlainText(line)
         self.output.appendPlainText("Done: all OK" if ok_all else "Done: with errors")

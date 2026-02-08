@@ -50,15 +50,21 @@ class LevelMeterWidget(QtWidgets.QWidget):
     """
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._min_db = -60.0
+        self._max_db = 0.0
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(6)
 
         # Title
-        title = QtWidgets.QLabel("Levels", self)
+        title = QtWidgets.QLabel("Levels (dBFS)", self)
         title.setAlignment(QtCore.Qt.AlignHCenter)
         title.setStyleSheet("color: palette(mid);")
         root.addWidget(title)
+        self.scale_lbl = QtWidgets.QLabel("", self)
+        self.scale_lbl.setAlignment(QtCore.Qt.AlignHCenter)
+        self.scale_lbl.setStyleSheet("color: palette(mid); font-size: 10px;")
+        root.addWidget(self.scale_lbl)
 
         bars = QtWidgets.QHBoxLayout()
         bars.setSpacing(8)
@@ -74,8 +80,8 @@ class LevelMeterWidget(QtWidgets.QWidget):
         self.lbl_val_l = QtWidgets.QLabel("0", self)
         self.lbl_val_r = QtWidgets.QLabel("0", self)
         for w in (self.lbl_val_l, self.lbl_val_r):
-            w.setAlignment(QtCore.Qt.AlignHCenter)
-            w.setStyleSheet("color: palette(mid); font-size: 10px;")
+            w.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter)
+            w.setStyleSheet("color: palette(mid); font-size: 9px;")
         vals.addWidget(self.lbl_val_l, 1)
         vals.addWidget(self.lbl_val_r, 1)
         root.addLayout(vals)
@@ -85,6 +91,7 @@ class LevelMeterWidget(QtWidgets.QWidget):
         self.hint.setAlignment(QtCore.Qt.AlignHCenter)
         self.hint.setStyleSheet("color: palette(mid); font-size: 10px;")
         root.addWidget(self.hint)
+        self.set_scale_db(self._min_db, self._max_db)
 
     def set_levels(self, left01: float, right01: float):
         self.left_bar.set_level(left01)
@@ -98,3 +105,14 @@ class LevelMeterWidget(QtWidgets.QWidget):
         self.right_bar.set_value_text(right_text)
         self.lbl_val_l.setText(str(left_text))
         self.lbl_val_r.setText(str(right_text))
+
+    def set_scale_db(self, min_db: float, max_db: float):
+        self._min_db = float(min_db)
+        self._max_db = float(max_db)
+        self.scale_lbl.setText(f"{self._min_db:.0f} .. {self._max_db:.1f} dBFS")
+
+    def set_levels_db(self, left_db: float, right_db: float):
+        span = max(1e-6, self._max_db - self._min_db)
+        l01 = (float(left_db) - self._min_db) / span
+        r01 = (float(right_db) - self._min_db) / span
+        self.set_levels(l01, r01)

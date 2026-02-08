@@ -2,7 +2,8 @@ from __future__ import annotations
 from PySide6 import QtWidgets, QtCore, QtGui
 
 from .util import q_to_hex_twos, notify
-from ..device_interface.cdc_link import CdcLink, auto_detect_port
+from ..device_interface.cdc_link import auto_detect_port
+from ..device_interface.device_link_manager import get_device_link_manager
 from ..device_interface.record_ids import TYPE_COEFF, TYPE_APP_STATE, REC_MIX_GAIN, REC_STATE_MIXGAIN
 from ..device_interface.state_sidecar import pack_q97_values
 from pathlib import Path
@@ -30,6 +31,7 @@ class MixGainAdjustTab(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
+        self._link_mgr = get_device_link_manager()
 
         root = QtWidgets.QHBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -166,13 +168,7 @@ class MixGainAdjustTab(QtWidgets.QWidget):
         if not port:
             QtWidgets.QMessageBox.warning(self, 'Mix/Gain', 'No device found (auto-detect failed)')
             return
-        try:
-            link = CdcLink(port)
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'Mix/Gain', f'Failed to open {port}: {e}')
-            return
-
-        try:
+        def _send(link) -> tuple[bool, list[str]]:
             payload = bytearray()
             payload.append(0x4A)
             cur_page = None
@@ -187,14 +183,6 @@ class MixGainAdjustTab(QtWidgets.QWidget):
                 payload.append(val_u32 & 0xFF)
             # Dedicated record id for MIX/GAIN ADJUST
             ok, lines = link.jwrb_with_log(TYPE_COEFF, REC_MIX_GAIN, bytes(payload))
-            if ok:
-                applies = [ln for ln in lines if ln.startswith('OK APPLY') or ln.startswith('ERR APPLY')]
-                msg = 'Mix/Gain Adjust saved + applied'
-                if applies:
-                    msg += " — " + " | ".join(applies)
-                notify(self, msg)
-            else:
-                QtWidgets.QMessageBox.warning(self, 'Mix/Gain', 'Journal write failed')
             # Sidecar
             try:
                 order = list(self.NAMES.keys())
@@ -202,8 +190,19 @@ class MixGainAdjustTab(QtWidgets.QWidget):
                 _ok2, _ = link.jwrb_with_log(TYPE_APP_STATE, REC_STATE_MIXGAIN, side)
             except Exception:
                 pass
-        finally:
-            try:
-                link.close()
-            except Exception:
-                pass
+            return ok, lines
+
+        try:
+            ok, lines = self._link_mgr.run(_send, port=port, auto=False)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Mix/Gain', f'Failed to open {port}: {e}')
+            return
+
+        if ok:
+            applies = [ln for ln in lines if ln.startswith('OK APPLY') or ln.startswith('ERR APPLY')]
+            msg = 'Mix/Gain Adjust saved + applied'
+            if applies:
+                msg += " — " + " | ".join(applies)
+            notify(self, msg)
+        else:
+            QtWidgets.QMessageBox.warning(self, 'Mix/Gain', 'Journal write failed')

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from PySide6 import QtWidgets, QtCore
 
-from ..device_interface.cdc_link import CdcLink, auto_detect_port, list_serial_ports
+from ..device_interface.cdc_link import auto_detect_port, list_serial_ports
+from ..device_interface.device_link_manager import get_device_link_manager
 
 
 class JournalTab(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._link: CdcLink | None = None
+        self._link_mgr = get_device_link_manager()
+        self._connected_port: str = ""
 
         # Top row: port selection and controls
         self.port_combo = QtWidgets.QComboBox(self)
@@ -68,38 +70,53 @@ class JournalTab(QtWidgets.QWidget):
 
         # Initial
         self._on_refresh()
+        self._apply_connection_state(False)
 
     # --------------- Helpers ---------------
     def _set_status(self, text: str):
         self.status_lbl.setText(text)
 
+    def _apply_connection_state(self, connected: bool, port: str = "", status_text: str = ""):
+        self.connect_btn.setText("Disconnect" if connected else "Connect")
+        self.port_combo.setEnabled(not connected)
+        self.refresh_btn.setEnabled(not connected)
+        self.auto_btn.setEnabled(not connected)
+        if status_text:
+            self._set_status(status_text)
+        elif connected:
+            self._set_status(f"Connected: {port}")
+        else:
+            self._set_status("Disconnected")
+
     def _ensure_link(self) -> bool:
-        if self._link is not None:
+        if self._connected_port:
             return True
         port = self._current_port()
         if not port:
             QtWidgets.QMessageBox.warning(self, "Device", "Please select a serial port.")
             return False
         try:
-            self._link = CdcLink(port)
-            if not self._link.init():
-                self._set_status("Init failed")
+            self._connected_port = self._link_mgr.connect(port=port, auto=False)
+            ok = self._link_mgr.run(lambda link: link.init(), port=self._connected_port, auto=False)
+            if not ok:
+                self._apply_connection_state(True, self._connected_port, f"Connected: {self._connected_port} (init failed)")
             else:
-                self._set_status(f"Connected: {port}")
+                self._apply_connection_state(True, self._connected_port)
             return True
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Connect", f"Failed to open {port}:\n{e}")
-            self._link = None
+            self._connected_port = ""
+            self._apply_connection_state(False)
             return False
 
     def _close_link(self):
-        if self._link is not None:
+        if self._connected_port:
             try:
-                self._link.close()
+                self._link_mgr.disconnect()
             except Exception:
                 pass
-            self._link = None
-            self._set_status("Disconnected")
+            self._connected_port = ""
+        self._apply_connection_state(False)
 
     def _current_port(self) -> str:
         idx = self.port_combo.currentIndex()
@@ -146,13 +163,10 @@ class JournalTab(QtWidgets.QWidget):
         self._populate_ports(auto_select=True)
 
     def _on_connect(self):
-        if self._link is None:
+        if not self._connected_port:
             self._ensure_link()
-            if self._link is not None:
-                self.connect_btn.setText("Disconnect")
         else:
             self._close_link()
-            self.connect_btn.setText("Connect")
 
     def _on_jrd(self):
         if not self._ensure_link():
@@ -161,7 +175,15 @@ class JournalTab(QtWidgets.QWidget):
         if not ti:
             return
         typ, _id = ti
-        data = self._link.jrd(typ, _id)
+        try:
+            data = self._link_mgr.run(
+                lambda link: link.jrd(typ, _id),
+                port=self._connected_port,
+                auto=False,
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Journal", f"Read failed:\n{e}")
+            return
         if data is None:
             self.output.setPlainText("ERR JNF (no record)")
             return
@@ -174,7 +196,15 @@ class JournalTab(QtWidgets.QWidget):
         if not ti:
             return
         typ, _id = ti
-        data = self._link.jrdb(typ, _id)
+        try:
+            data = self._link_mgr.run(
+                lambda link: link.jrdb(typ, _id),
+                port=self._connected_port,
+                auto=False,
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Journal", f"Read failed:\n{e}")
+            return
         if data is None:
             self.output.setPlainText("ERR JNF (no record)")
             return
@@ -183,7 +213,15 @@ class JournalTab(QtWidgets.QWidget):
     def _on_readlog(self):
         if not self._ensure_link():
             return
-        lines = self._link.read_lines(1.0)
+        try:
+            lines = self._link_mgr.run(
+                lambda link: link.read_lines(1.0),
+                port=self._connected_port,
+                auto=False,
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Journal", f"Read log failed:\n{e}")
+            return
         if not lines:
             self.output.appendPlainText("[log] (no lines)\n")
             return

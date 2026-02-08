@@ -3,7 +3,8 @@ from PySide6 import QtWidgets, QtCore, QtGui
 import math
 
 from .util import mk_dspin, q_to_hex_twos, notify
-from ..device_interface.cdc_link import CdcLink, auto_detect_port
+from ..device_interface.cdc_link import auto_detect_port
+from ..device_interface.device_link_manager import get_device_link_manager
 from ..device_interface.record_ids import TYPE_COEFF, TYPE_APP_STATE, REC_INPUT_MIXER, REC_STATE_MIXER
 from ..device_interface.state_sidecar import pack_q97_values
 from pathlib import Path
@@ -22,6 +23,7 @@ class InputMixerTab(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
+        self._link_mgr = get_device_link_manager()
 
         # Match other tabs: left readout, right controls
         root = QtWidgets.QHBoxLayout(self)
@@ -254,13 +256,7 @@ class InputMixerTab(QtWidgets.QWidget):
         if not port:
             QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'No device found (auto-detect failed)')
             return
-        try:
-            link = CdcLink(port)
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'Input Mixer', f'Failed to open {port}: {e}')
-            return
-
-        try:
+        def _send(link) -> tuple[bool, list[str]]:
             # Build one payload for all 4 mixer words
             payload = bytearray()
             payload.append(0x4A)  # i2c7 (ignored by fw)
@@ -275,14 +271,6 @@ class InputMixerTab(QtWidgets.QWidget):
                 payload.append((val_u32 >> 8) & 0xFF)
                 payload.append(val_u32 & 0xFF)
             ok, lines = link.jwrb_with_log(TYPE_COEFF, REC_INPUT_MIXER, bytes(payload))
-            if ok:
-                applies = [ln for ln in lines if ln.startswith('OK APPLY') or ln.startswith('ERR APPLY')]
-                msg = 'Input Mixer saved + applied'
-                if applies:
-                    msg += " — " + " | ".join(applies)
-                notify(self, msg)
-            else:
-                QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'Journal write failed')
             # Sidecar
             try:
                 order = ['LefttoLeft','RighttoLeft','LefttoRight','RighttoRight']
@@ -290,8 +278,19 @@ class InputMixerTab(QtWidgets.QWidget):
                 _ok2, _ = link.jwrb_with_log(TYPE_APP_STATE, REC_STATE_MIXER, side)
             except Exception:
                 pass
-        finally:
-            try:
-                link.close()
-            except Exception:
-                pass
+            return ok, lines
+
+        try:
+            ok, lines = self._link_mgr.run(_send, port=port, auto=False)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'Input Mixer', f'Failed to open {port}: {e}')
+            return
+
+        if ok:
+            applies = [ln for ln in lines if ln.startswith('OK APPLY') or ln.startswith('ERR APPLY')]
+            msg = 'Input Mixer saved + applied'
+            if applies:
+                msg += " — " + " | ".join(applies)
+            notify(self, msg)
+        else:
+            QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'Journal write failed')

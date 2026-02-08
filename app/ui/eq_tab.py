@@ -10,7 +10,8 @@ from app.eqcore import (
     default_freq_grid, sos_response_db
 )
 from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify
-from ..device_interface.cdc_link import CdcLink, auto_detect_port
+from ..device_interface.cdc_link import auto_detect_port
+from ..device_interface.device_link_manager import get_device_link_manager
 from ..device_interface.record_ids import (
     TYPE_COEFF,
     TYPE_APP_STATE,
@@ -23,6 +24,7 @@ from ..device_interface.state_sidecar import pack_eq_state
 class EqTab(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
+        self._link_mgr = get_device_link_manager()
         # Show 14 user-configurable biquads; BQ15 is reserved for Stage Gain (computed only)
         self._num_sections = 14
 
@@ -476,12 +478,7 @@ class EqTab(QtWidgets.QWidget):
         if not port:
             QtWidgets.QMessageBox.warning(self, 'EQ', 'No device found (auto-detect failed)')
             return
-        try:
-            link = CdcLink(port)
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'EQ', f'Failed to open {port}: {e}')
-            return
-        try:
+        def _send(link) -> int:
             total_sections = 0; errs = 0
             for sec, items in section_items.items():
                 if not items:
@@ -512,12 +509,15 @@ class EqTab(QtWidgets.QWidget):
                 # do not count sidecar failure against coeff apply; it's non-critical
             except Exception:
                 pass
-            if errs == 0:
-                notify(self, 'EQ coefficients saved + applied')
-            else:
-                QtWidgets.QMessageBox.warning(self, 'EQ', f'Completed with {errs} journal write errors')
-        finally:
-            try:
-                link.close()
-            except Exception:
-                pass
+            return errs
+
+        try:
+            errs = self._link_mgr.run(_send, port=port, auto=False)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'EQ', f'Failed to open {port}: {e}')
+            return
+
+        if errs == 0:
+            notify(self, 'EQ coefficients saved + applied')
+        else:
+            QtWidgets.QMessageBox.warning(self, 'EQ', f'Completed with {errs} journal write errors')
