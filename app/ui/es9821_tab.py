@@ -15,7 +15,7 @@ class Es9821Tab(QtWidgets.QWidget):
         super().__init__(parent)
         self._link_mgr = get_device_link_manager()
         self._connected_port: str = ""
-        self._map_path = mapping_path or Path("app/eqcore/maps/shabrang_es9821.jsonl")
+        self._map_path = mapping_path or (Path(__file__).resolve().parents[2] / "app/eqcore/maps/shabrang_es9821.jsonl")
 
         self.port_combo = QtWidgets.QComboBox(self)
         self.refresh_btn = QtWidgets.QPushButton("Refresh", self)

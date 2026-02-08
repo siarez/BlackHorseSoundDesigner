@@ -1,1 +1,4 @@
 /app/exports/
+/build/
+/dist/
+/*.spec.bak
