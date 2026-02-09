@@ -1,5 +1,115 @@
 from __future__ import annotations
-from PySide6 import QtWidgets, QtCore
+import math
+from PySide6 import QtWidgets, QtCore, QtGui
+
+
+class _NotchedProgressBar(QtWidgets.QProgressBar):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._min_db = -80.0
+        self._max_db = 0.0
+        self._major_step_db = 10.0
+        self._minor_step_db = 5.0
+
+    def set_db_range(self, min_db: float, max_db: float):
+        self._min_db = float(min_db)
+        self._max_db = float(max_db)
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        rect = self.contentsRect().adjusted(2, 2, -2, -2)
+        if rect.height() <= 0:
+            return
+        span = self._max_db - self._min_db
+        if span <= 1e-6:
+            return
+
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, False)
+        major_pen = QtGui.QPen(self.palette().mid().color())
+        major_pen.setWidth(1)
+        minor_color = self.palette().mid().color()
+        minor_color.setAlpha(120)
+        minor_pen = QtGui.QPen(minor_color)
+        minor_pen.setWidth(1)
+
+        # Minor ticks every 5 dB.
+        db = self._min_db
+        while db <= self._max_db + 1e-6:
+            n = (db - self._min_db) / span
+            y = rect.bottom() - int(n * rect.height())
+            p.setPen(minor_pen)
+            p.drawLine(rect.left(), y, rect.right(), y)
+            db += self._minor_step_db
+
+        # Major ticks every 10 dB.
+        db = self._min_db
+        while db <= self._max_db + 1e-6:
+            n = (db - self._min_db) / span
+            y = rect.bottom() - int(n * rect.height())
+            p.setPen(major_pen)
+            p.drawLine(rect.left(), y, rect.right(), y)
+            db += self._major_step_db
+
+
+class _ScaleCanvas(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._min_db = -80.0
+        self._max_db = 0.0
+        self._major_step_db = 10.0
+        self.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Expanding)
+        self.setMinimumWidth(34)
+
+    def set_db_range(self, min_db: float, max_db: float):
+        self._min_db = float(min_db)
+        self._max_db = float(max_db)
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        rect = self.contentsRect().adjusted(0, 2, 0, -2)
+        if rect.height() <= 0:
+            return
+        span = self._max_db - self._min_db
+        if span <= 1e-6:
+            return
+
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
+        p.setPen(self.palette().mid().color())
+        fm = p.fontMetrics()
+        step = self._major_step_db
+        start = math.ceil(self._min_db / step) * step
+        db = start
+        while db <= self._max_db + 1e-6:
+            # Skip endpoints to avoid clipping against top/bottom margins.
+            if abs(db - self._min_db) < 1e-6 or abs(db - self._max_db) < 1e-6:
+                db += step
+                continue
+            n = (db - self._min_db) / span
+            y = rect.bottom() - int(n * rect.height())
+            txt = f"{int(round(db))}"
+            p.drawText(rect.left() + 2, y + (fm.ascent() // 2), txt)
+            db += step
+
+
+class _ScaleColumn(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(2, 4, 2, 4)
+        lay.setSpacing(4)
+        self.canvas = _ScaleCanvas(self)
+        lay.addWidget(self.canvas, 1)
+        # Spacer row to align with the channel index labels under each bar.
+        spacer = QtWidgets.QLabel(" ", self)
+        spacer.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop)
+        lay.addWidget(spacer, 0)
+
+    def set_db_range(self, min_db: float, max_db: float):
+        self.canvas.set_db_range(min_db, max_db)
 
 
 class _VBar(QtWidgets.QWidget):
@@ -8,7 +118,7 @@ class _VBar(QtWidgets.QWidget):
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
         lay.setSpacing(4)
-        self.bar = QtWidgets.QProgressBar(self)
+        self.bar = _NotchedProgressBar(self)
         self.bar.setOrientation(QtCore.Qt.Vertical)
         self.bar.setRange(0, 1000)
         self.bar.setValue(0)
@@ -17,7 +127,7 @@ class _VBar(QtWidgets.QWidget):
         # Neutral base style; color is updated dynamically
         self._set_color('#3cb371')  # mediumseagreen
         lbl = QtWidgets.QLabel(title, self)
-        lbl.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop)
+        lbl.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
         lay.addWidget(self.bar, 1)
         lay.addWidget(lbl, 0)
 
@@ -38,9 +148,26 @@ class _VBar(QtWidgets.QWidget):
         else:
             self._set_color('#e74c3c')  # red
 
+    def set_level_with_db(self, v01: float, dbfs: float):
+        v = int(max(0.0, min(1.0, float(v01))) * 1000)
+        self.bar.setValue(v)
+        db = float(dbfs)
+        # Color zones are based on dBFS thresholds only.
+        if db < -60.0:
+            self._set_color('#202020')  # gray for very low levels
+        elif db < -18.0:
+            self._set_color('#3cb371')  # green
+        elif db < -6.0:
+            self._set_color('#f1c40f')  # yellow
+        else:
+            self._set_color('#e74c3c')  # red
+
     def set_value_text(self, text: str):
         # No-op: external widget shows numeric values in a shared row
         pass
+
+    def set_db_range(self, min_db: float, max_db: float):
+        self.bar.set_db_range(min_db, max_db)
 
 
 class LevelMeterWidget(QtWidgets.QWidget):
@@ -68,9 +195,11 @@ class LevelMeterWidget(QtWidgets.QWidget):
 
         bars = QtWidgets.QHBoxLayout()
         bars.setSpacing(8)
-        self.left_bar = _VBar("1", self)
-        self.right_bar = _VBar("2", self)
+        self.left_bar = _VBar("IN1", self)
+        self.scale_col = _ScaleColumn(self)
+        self.right_bar = _VBar("IN2", self)
         bars.addWidget(self.left_bar, 1)
+        bars.addWidget(self.scale_col, 0)
         bars.addWidget(self.right_bar, 1)
         root.addLayout(bars, 1)
 
@@ -110,9 +239,13 @@ class LevelMeterWidget(QtWidgets.QWidget):
         self._min_db = float(min_db)
         self._max_db = float(max_db)
         self.scale_lbl.setText(f"{self._min_db:.0f} .. {self._max_db:.1f} dBFS")
+        self.left_bar.set_db_range(self._min_db, self._max_db)
+        self.scale_col.set_db_range(self._min_db, self._max_db)
+        self.right_bar.set_db_range(self._min_db, self._max_db)
 
     def set_levels_db(self, left_db: float, right_db: float):
         span = max(1e-6, self._max_db - self._min_db)
         l01 = (float(left_db) - self._min_db) / span
         r01 = (float(right_db) - self._min_db) / span
-        self.set_levels(l01, r01)
+        self.left_bar.set_level_with_db(l01, left_db)
+        self.right_bar.set_level_with_db(r01, right_db)

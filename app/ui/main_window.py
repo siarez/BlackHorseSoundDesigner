@@ -1,6 +1,6 @@
 from __future__ import annotations
+from collections import deque
 import math
-import os
 import time
 from PySide6 import QtWidgets, QtCore
 
@@ -127,31 +127,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self._meter_enabled = hasattr(self, 'level_meter')
         self._meter_level_1 = 0.0
         self._meter_level_2 = 0.0
-        self._meter_raw_1 = 0
-        self._meter_raw_2 = 0
-        self._meter_decay_db_per_s = 6.0
-        self._meter_min_dbfs = -60.0
+        self._meter_decay_db_per_s = 20.0
+        self._meter_min_dbfs = -80.0
         self._meter_max_dbfs = 0.0
-        self._meter_dbfs_offset = float(os.environ.get("BH_METER_DBFS_OFFSET", "0.0") or 0.0)
-        self._meter_calibration_mode = (os.environ.get("BH_METER_CAL_MODE", "0") or "").strip().lower() in {"1", "true", "yes", "on"}
-        self._meter_show_raw = (os.environ.get("BH_METER_SHOW_RAW", "0") or "").strip().lower() in {"1", "true", "yes", "on"}
-        self._meter_cal_smooth_s = max(0.0, float(os.environ.get("BH_METER_CAL_SMOOTH_S", "0.25") or 0.25))
-        self._meter_cal_disp_1 = 0.0
-        self._meter_cal_disp_2 = 0.0
-        self._meter_cal_last_s = time.monotonic()
+        self._meter_label_avg_window_s = 0.5
+        self._meter_label_hist_1 = deque()
+        self._meter_label_hist_2 = deque()
+        # Calibrated default: 0 dBFS corresponds to 2 Vrms per datasheet.
+        self._meter_dbfs_offset = 4.3
         self._meter_last_tick_s = time.monotonic()
         if hasattr(self, 'level_meter'):
             try:
-                mode = "CAL" if self._meter_calibration_mode else "PEAK"
-                self.level_meter.set_hint(f"starting... [{mode}] (offset {self._meter_dbfs_offset:+.1f} dB)")
+                self.level_meter.set_hint(f"starting... (offset {self._meter_dbfs_offset:+.1f} dB)")
                 self.level_meter.set_scale_db(self._meter_min_dbfs, self._meter_max_dbfs)
-                self.level_meter.set_values_text(self._format_meter_text(float("-inf"), 0), self._format_meter_text(float("-inf"), 0))
+                self.level_meter.set_values_text(self._format_meter_text(float("-inf")), self._format_meter_text(float("-inf")))
             except Exception:
                 pass
         if self._meter_enabled:
             self._meter_timer.start()
-            if not self._meter_calibration_mode:
-                self._meter_anim_timer.start()
+            self._meter_anim_timer.start()
 
     def _on_export(self):
         out = export_pf5_from_ui(self, self.xo_tab)
@@ -191,37 +185,12 @@ class MainWindow(QtWidgets.QMainWindow):
             if result is None:
                 return
             ch1, ch2 = result
-            self._meter_raw_1 = int(ch1)
-            self._meter_raw_2 = int(ch2)
             p1 = max(0.0, min(1.0, int(ch1) / 65535.0))
             p2 = max(0.0, min(1.0, int(ch2) / 65535.0))
-            if self._meter_calibration_mode:
-                # Direct mode for calibration: no app-side hold/decay.
-                if self._meter_cal_smooth_s > 0.0:
-                    now = time.monotonic()
-                    dt = max(0.001, min(0.5, now - self._meter_cal_last_s))
-                    self._meter_cal_last_s = now
-                    alpha = math.exp(-dt / self._meter_cal_smooth_s)
-                    self._meter_cal_disp_1 = (alpha * self._meter_cal_disp_1) + ((1.0 - alpha) * p1)
-                    self._meter_cal_disp_2 = (alpha * self._meter_cal_disp_2) + ((1.0 - alpha) * p2)
-                else:
-                    self._meter_cal_disp_1 = p1
-                    self._meter_cal_disp_2 = p2
-                self._meter_level_1 = self._meter_cal_disp_1
-                self._meter_level_2 = self._meter_cal_disp_2
-                dbfs_1 = self._amp_to_dbfs(self._meter_cal_disp_1) + self._meter_dbfs_offset
-                dbfs_2 = self._amp_to_dbfs(self._meter_cal_disp_2) + self._meter_dbfs_offset
-                self.level_meter.set_levels_db(dbfs_1, dbfs_2)
-                self.level_meter.set_values_text(
-                    self._format_meter_text(dbfs_1, self._meter_raw_1),
-                    self._format_meter_text(dbfs_2, self._meter_raw_2),
-                )
-            else:
-                self._meter_level_1 = max(self._meter_level_1, p1)
-                self._meter_level_2 = max(self._meter_level_2, p2)
+            self._meter_level_1 = max(self._meter_level_1, p1)
+            self._meter_level_2 = max(self._meter_level_2, p2)
             port = self._link_mgr.current_port() or ""
-            mode = "CAL" if self._meter_calibration_mode else "PEAK"
-            self.level_meter.set_hint(f"{port} [{mode}] ({self._meter_dbfs_offset:+.1f} dB)")
+            self.level_meter.set_hint(f"{port} ({self._meter_dbfs_offset:+.1f} dB)")
         except Exception:
             self.level_meter.set_hint('No data')
 
@@ -229,8 +198,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if not getattr(self, '_meter_enabled', False):
             return
         if not hasattr(self, 'level_meter'):
-            return
-        if self._meter_calibration_mode:
             return
         now = time.monotonic()
         dt = max(0.0, min(0.25, now - self._meter_last_tick_s))
@@ -242,26 +209,35 @@ class MainWindow(QtWidgets.QMainWindow):
         dbfs_1 = self._amp_to_dbfs(self._meter_level_1) + self._meter_dbfs_offset
         dbfs_2 = self._amp_to_dbfs(self._meter_level_2) + self._meter_dbfs_offset
         self.level_meter.set_levels_db(dbfs_1, dbfs_2)
+        self._push_meter_label_samples(now, dbfs_1, dbfs_2)
+        avg_dbfs_1 = self._mean_dbfs(self._meter_label_hist_1, dbfs_1)
+        avg_dbfs_2 = self._mean_dbfs(self._meter_label_hist_2, dbfs_2)
         self.level_meter.set_values_text(
-            self._format_meter_text(dbfs_1, self._meter_raw_1),
-            self._format_meter_text(dbfs_2, self._meter_raw_2),
+            self._format_meter_text(avg_dbfs_1),
+            self._format_meter_text(avg_dbfs_2),
         )
 
     def _amp_to_dbfs(self, amp_norm: float) -> float:
         return 20.0 * math.log10(max(0.0, float(amp_norm), 1e-9))
 
-    def _format_meter_text(self, dbfs: float, raw_code: int) -> str:
+    def _format_meter_text(self, dbfs: float) -> str:
         if dbfs <= -180.0:
-            base = "-inf dBFS"
-        else:
-            base = f"{dbfs:.1f} dBFS"
-        if not self._meter_show_raw:
-            return base
-        if dbfs <= -180.0:
-            base_short = "-inf"
-        else:
-            base_short = f"{dbfs:.1f}"
-        return f"S:{base_short}\nR:{int(raw_code)}"
+            return "-inf dBFS"
+        return f"{dbfs:.1f} dBFS"
+
+    def _push_meter_label_samples(self, now_s: float, dbfs_1: float, dbfs_2: float):
+        self._meter_label_hist_1.append((float(now_s), float(dbfs_1)))
+        self._meter_label_hist_2.append((float(now_s), float(dbfs_2)))
+        cutoff = float(now_s) - float(self._meter_label_avg_window_s)
+        while self._meter_label_hist_1 and self._meter_label_hist_1[0][0] < cutoff:
+            self._meter_label_hist_1.popleft()
+        while self._meter_label_hist_2 and self._meter_label_hist_2[0][0] < cutoff:
+            self._meter_label_hist_2.popleft()
+
+    def _mean_dbfs(self, hist, default_dbfs: float) -> float:
+        if not hist:
+            return float(default_dbfs)
+        return sum(v for _, v in hist) / float(len(hist))
 
     # ---------------- Save/Load State (JSON) ----------------
     def _gather_state(self) -> dict:
