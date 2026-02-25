@@ -3,8 +3,11 @@ from PySide6 import QtWidgets, QtCore, QtGui
 import math
 
 from .util import mk_dspin, q_to_hex_twos, notify
-from ..device_interface.cdc_link import auto_detect_port
-from ..device_interface.device_link_manager import get_device_link_manager
+from ..device_interface.device_write_manager import (
+    JournalWrite,
+    build_i2c32_payload,
+    get_device_write_manager,
+)
 from ..device_interface.record_ids import TYPE_COEFF, TYPE_APP_STATE, REC_INPUT_MIXER, REC_STATE_MIXER
 from ..device_interface.state_sidecar import pack_q97_values
 from pathlib import Path
@@ -23,7 +26,7 @@ class InputMixerTab(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
-        self._link_mgr = get_device_link_manager()
+        self._writer = get_device_write_manager()
 
         # Match other tabs: left readout, right controls
         root = QtWidgets.QHBoxLayout(self)
@@ -252,45 +255,32 @@ class InputMixerTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'No INPUT MIXER map entries found to send')
             return
 
-        port = auto_detect_port()
-        if not port:
-            QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'No device found (auto-detect failed)')
+        writes = [
+            JournalWrite(
+                typ=TYPE_COEFF,
+                rec_id=REC_INPUT_MIXER,
+                payload=build_i2c32_payload(items),
+                label="INPUT MIXER",
+            )
+        ]
+        try:
+            order = ['LefttoLeft', 'RighttoLeft', 'LefttoRight', 'RighttoRight']
+            side = pack_q97_values(order, self.to_state_dict())
+            writes.append(JournalWrite(TYPE_APP_STATE, REC_STATE_MIXER, side, "STATE MIXER"))
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, 'Input Mixer', f'Failed to build mixer sidecar: {e}')
             return
-        def _send(link) -> tuple[bool, list[str]]:
-            # Build one payload for all 4 mixer words
-            payload = bytearray()
-            payload.append(0x4A)  # i2c7 (ignored by fw)
-            cur_page = None
-            for page_i, sub_i, val_u32 in items:
-                if page_i != cur_page:
-                    payload.append(0xFD); payload.append(page_i & 0xFF)
-                    cur_page = page_i
-                payload.append(0x80 | (sub_i & 0x7F))
-                payload.append((val_u32 >> 24) & 0xFF)
-                payload.append((val_u32 >> 16) & 0xFF)
-                payload.append((val_u32 >> 8) & 0xFF)
-                payload.append(val_u32 & 0xFF)
-            ok, lines = link.jwrb_with_log(TYPE_COEFF, REC_INPUT_MIXER, bytes(payload))
-            # Sidecar
-            try:
-                order = ['LefttoLeft','RighttoLeft','LefttoRight','RighttoRight']
-                side = pack_q97_values(order, self.to_state_dict())
-                _ok2, _ = link.jwrb_with_log(TYPE_APP_STATE, REC_STATE_MIXER, side)
-            except Exception:
-                pass
-            return ok, lines
 
         try:
-            ok, lines = self._link_mgr.run(_send, port=port, auto=False)
+            res = self._writer.apply(writes, auto=True)
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'Input Mixer', f'Failed to open {port}: {e}')
+            QtWidgets.QMessageBox.critical(self, 'Input Mixer', f'Failed to write device: {e}')
             return
 
-        if ok:
-            applies = [ln for ln in lines if ln.startswith('OK APPLY') or ln.startswith('ERR APPLY')]
+        if res.ok:
             msg = 'Input Mixer saved + applied'
-            if applies:
-                msg += " — " + " | ".join(applies)
+            if res.apply_logs:
+                msg += " — " + " | ".join(res.apply_logs)
             notify(self, msg)
         else:
-            QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'Journal write failed')
+            QtWidgets.QMessageBox.warning(self, 'Input Mixer', f'Journal write failed: {", ".join(res.failed)}')

@@ -11,8 +11,11 @@ from app.eqcore import (
     design_first_order_lpf, design_first_order_hpf,
 )
 from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify
-from ..device_interface.cdc_link import auto_detect_port
-from ..device_interface.device_link_manager import get_device_link_manager
+from ..device_interface.device_write_manager import (
+    JournalWrite,
+    build_i2c32_payload,
+    get_device_write_manager,
+)
 from ..device_interface.record_ids import (
     TYPE_COEFF,
     TYPE_APP_STATE,
@@ -28,7 +31,7 @@ from ..device_interface.state_sidecar import pack_xo_state
 class CrossoverTab(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
-        self._link_mgr = get_device_link_manager()
+        self._writer = get_device_write_manager()
 
         self._xo_num_sections = 5
 
@@ -698,6 +701,25 @@ class CrossoverTab(QtWidgets.QWidget):
             invert_this = self.chk_xo_pol_B.isChecked() and (row == 0)
             sections_B.append(self._design_xo_biquad(self.table_xo_B, row, invert_polarity=invert_this))
 
+        # Map sections to HW-safe coefficient ranges.
+        # TAS B0/B2 are 1.31; boosted peaking/shelf sections can exceed |1| and clip if sent raw.
+        # We normalize per-section numerators and carry the product into channel output gain.
+        def _map_sections_for_hw(sections):
+            mapped = []
+            gain_mul = 1.0
+            for s in sections:
+                Si = max(1.0, abs(s.b0), abs(s.b1) / 2.0, abs(s.b2))
+                mapped.append((s.b0 / Si, s.b1 / Si, s.b2 / Si, s.a1, s.a2))
+                gain_mul *= Si
+            return mapped, gain_mul
+
+        mapped_A, gain_mul_A = _map_sections_for_hw(sections_A)
+        mapped_B, gain_mul_B = _map_sections_for_hw(sections_B)
+        gA_db = float(getattr(self, 'spin_gain_A', None).value()) if hasattr(self, 'spin_gain_A') else 0.0
+        gB_db = float(getattr(self, 'spin_gain_B', None).value()) if hasattr(self, 'spin_gain_B') else 0.0
+        gA_lin_eff = (10.0 ** (gA_db / 20.0)) * gain_mul_A
+        gB_lin_eff = (10.0 ** (gB_db / 20.0)) * gain_mul_B
+
         # Load TAS3251 PF5 reference map for page/subaddr
         ref_path = (Path(__file__).resolve().parents[2] / 'app/eqcore/maps/shabrang_tas3251.jsonl')
         try:
@@ -752,20 +774,18 @@ class CrossoverTab(QtWidgets.QWidget):
                 if not m:
                     continue
                 idx = int(m.group(1)); tag = m.group(2)
-                if not (1 <= idx <= len(sections_A)):
+                if not (1 <= idx <= len(mapped_A)):
                     continue
-                sos = sections_A[idx-1]
-                val_u32 = _u32_from(tag, (sos.b0, sos.b1, sos.b2, sos.a1, sos.a2))
+                val_u32 = _u32_from(tag, mapped_A[idx - 1])
                 items_A.append((page_i, sub_i, val_u32))
             elif current == 'SUB CROSS OVER BQs' and name.startswith('CH-SubBQ'):
                 m = _re.match(r"^CH-SubBQ(\d+)(B0|B1|B2|A1|A2)$", name)
                 if not m:
                     continue
                 idx = int(m.group(1)); tag = m.group(2)
-                if not (1 <= idx <= len(sections_B)):
+                if not (1 <= idx <= len(mapped_B)):
                     continue
-                sos = sections_B[idx-1]
-                val_u32 = _u32_from(tag, (sos.b0, sos.b1, sos.b2, sos.a1, sos.a2))
+                val_u32 = _u32_from(tag, mapped_B[idx - 1])
                 items_B.append((page_i, sub_i, val_u32))
             elif current == 'PHASE OPTIMIZER' and name in ('DelayLeft','DelayRight','DelaySub'):
                 # 32.0 format raw integer (samples). Left/Right from Channel A; Sub from Channel B.
@@ -775,15 +795,11 @@ class CrossoverTab(QtWidgets.QWidget):
                 items_D.append((page_i, sub_i, int(v) & 0xFFFFFFFF))
             elif current == 'OUTPUT CROSS BAR':
                 # Map Channel A gain to AnalogLeftfromLeft, Channel B gain to AnalogRightfromSub (Q9.23)
-                gA_db = float(getattr(self, 'spin_gain_A', None).value()) if hasattr(self, 'spin_gain_A') else 0.0
-                gB_db = float(getattr(self, 'spin_gain_B', None).value()) if hasattr(self, 'spin_gain_B') else 0.0
                 if name == 'AnalogLeftfromLeft':
-                    gA_lin = 10.0 ** (gA_db / 20.0)
-                    u32 = int(q_to_hex_twos(gA_lin, 23), 16)
+                    u32 = int(q_to_hex_twos(gA_lin_eff, 23), 16)
                     items_G.append((page_i, sub_i, u32))
                 elif name == 'AnalogRightfromSub':
-                    gB_lin = 10.0 ** (gB_db / 20.0)
-                    u32 = int(q_to_hex_twos(gB_lin, 23), 16)
+                    u32 = int(q_to_hex_twos(gB_lin_eff, 23), 16)
                     items_G.append((page_i, sub_i, u32))
 
         # Optional test mode: send only Channel A biquads in a single batch
@@ -794,67 +810,52 @@ class CrossoverTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, 'Crossover', 'No crossover/delay/gain map entries found to send')
             return
 
-        # Build and send payloads for each section as type 0x52 records
-        port = auto_detect_port()
-        if not port:
-            QtWidgets.QMessageBox.warning(self, 'Crossover', 'No device found (auto-detect failed)')
-            return
-        def _send(link) -> tuple[int, int, list[str]]:
-            errs = 0; sent = 0
-            apply_logs: list[str] = []
-            for sec_name, items in (("CROSS OVER BQs", items_A), ("SUB CROSS OVER BQs", items_B), ("PHASE OPTIMIZER", items_D), ("OUTPUT CROSS BAR", items_G)):
-                if not items:
-                    continue
-                # Payload format matches eq_tab: [i2c7] + (0xFD page, then 0x80|sub + 4 bytes per value)
-                payload = bytearray()
-                payload.append(0x4A)  # i2c7
-                cur_page = None
-                for page_i, sub_i, val_u32 in items:
-                    if page_i != cur_page:
-                        payload.append(0xFD); payload.append(page_i & 0xFF)
-                        cur_page = page_i
-                    payload.append(0x80 | (sub_i & 0x7F))
-                    payload.append((val_u32 >> 24) & 0xFF)
-                    payload.append((val_u32 >> 16) & 0xFF)
-                    payload.append((val_u32 >> 8) & 0xFF)
-                    payload.append(val_u32 & 0xFF)
-                # record ids via central registry
-                rec_id = (
-                    REC_XO_A if sec_name.startswith('CROSS') else
-                    (REC_XO_B if sec_name.startswith('SUB') else (REC_PHASE if sec_name.startswith('PHASE') else REC_OUT_GAINS))
+        writes: list[JournalWrite] = []
+        sec_map = (
+            ("CROSS OVER BQs", items_A, REC_XO_A),
+            ("SUB CROSS OVER BQs", items_B, REC_XO_B),
+            ("PHASE OPTIMIZER", items_D, REC_PHASE),
+            ("OUTPUT CROSS BAR", items_G, REC_OUT_GAINS),
+        )
+        for sec_name, items, rec_id in sec_map:
+            if not items:
+                continue
+            writes.append(
+                JournalWrite(
+                    typ=TYPE_COEFF,
+                    rec_id=rec_id,
+                    payload=build_i2c32_payload(items),
+                    label=sec_name,
                 )
-                ok, lines = link.jwrb_with_log(TYPE_COEFF, rec_id, bytes(payload))
-                # Capture any APPLY lines for visibility
-                for ln in lines:
-                    if ln.startswith('OK APPLY') or ln.startswith('ERR APPLY'):
-                        apply_logs.append(f"[{sec_name}] {ln}")
-                sent += 1
-                if not ok:
-                    errs += 1
-            # Sidecar: XO A/B + misc
-            try:
-                xo_state = self.to_state_dict()
-                side = pack_xo_state(xo_state, int(self._fs))
-                _ok2, _ = link.jwrb_with_log(TYPE_APP_STATE, REC_STATE_XO, side)
-            except Exception:
-                pass
-            return errs, sent, apply_logs
+            )
+
+        # Sidecar: XO A/B + misc
+        try:
+            xo_state = self.to_state_dict()
+            writes.append(JournalWrite(TYPE_APP_STATE, REC_STATE_XO, pack_xo_state(xo_state, int(self._fs)), "STATE XO"))
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, 'Crossover', f'Failed to build XO sidecar: {e}')
+            return
 
         try:
-            errs, sent, apply_logs = self._link_mgr.run(_send, port=port, auto=False)
+            res = self._writer.apply(writes, auto=True)
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'Crossover', f'Failed to open {port}: {e}')
+            QtWidgets.QMessageBox.critical(self, 'Crossover', f'Failed to write device: {e}')
             return
 
-        if errs == 0 and sent > 0:
+        coeff_labels = {"CROSS OVER BQs", "SUB CROSS OVER BQs", "PHASE OPTIMIZER", "OUTPUT CROSS BAR"}
+        sent_coeff = any(w.label in coeff_labels for w in writes)
+        coeff_failures = [name for name in res.failed if name in coeff_labels]
+
+        if sent_coeff and not coeff_failures:
             msg = 'Crossover coefficients saved + applied'
-            if apply_logs:
-                msg += " — " + " | ".join(apply_logs)
+            if res.apply_logs:
+                msg += " — " + " | ".join(res.apply_logs)
             notify(self, msg)
-        elif sent == 0:
+        elif not sent_coeff:
             notify(self, 'Crossover: nothing was sent')
         else:
-            msg = f'Completed with {errs} journal write errors'
-            if apply_logs:
-                msg += "\n\n" + "\n".join(apply_logs)
+            msg = f'Completed with write errors: {", ".join(res.failed)}'
+            if res.apply_logs:
+                msg += "\n\n" + "\n".join(res.apply_logs)
             QtWidgets.QMessageBox.warning(self, 'Crossover', msg)

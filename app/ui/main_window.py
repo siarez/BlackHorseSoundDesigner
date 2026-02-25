@@ -84,7 +84,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs.addTab(self.mix_gain_tab, "Mix/Gain Adjust")
 
         self.xbar_tab = OutputCrossbarTab(tabs)
-        tabs.addTab(self.xbar_tab, "Output Cross Bar")
+        tabs.addTab(self.xbar_tab, "Digital Output Cross Bar")
 
         if self._dev_mode:
             self.coef_tab = CoefCheckTab(tabs)
@@ -127,7 +127,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._meter_enabled = hasattr(self, 'level_meter')
         self._meter_level_1 = 0.0
         self._meter_level_2 = 0.0
+        self._meter_peak_1 = 0.0
+        self._meter_peak_2 = 0.0
+        self._meter_peak_hold_until_1 = 0.0
+        self._meter_peak_hold_until_2 = 0.0
         self._meter_decay_db_per_s = 20.0
+        self._meter_peak_decay_db_per_s = 8.0
+        self._meter_peak_hold_s = 0.5
         self._meter_min_dbfs = -80.0
         self._meter_max_dbfs = 0.0
         self._meter_label_avg_window_s = 0.5
@@ -189,6 +195,13 @@ class MainWindow(QtWidgets.QMainWindow):
             p2 = max(0.0, min(1.0, int(ch2) / 65535.0))
             self._meter_level_1 = max(self._meter_level_1, p1)
             self._meter_level_2 = max(self._meter_level_2, p2)
+            now = time.monotonic()
+            if p1 >= self._meter_peak_1:
+                self._meter_peak_1 = p1
+                self._meter_peak_hold_until_1 = now + self._meter_peak_hold_s
+            if p2 >= self._meter_peak_2:
+                self._meter_peak_2 = p2
+                self._meter_peak_hold_until_2 = now + self._meter_peak_hold_s
             port = self._link_mgr.current_port() or ""
             self.level_meter.set_hint(f"{port} ({self._meter_dbfs_offset:+.1f} dB)")
         except Exception:
@@ -206,9 +219,18 @@ class MainWindow(QtWidgets.QMainWindow):
         decay = 10.0 ** (-(self._meter_decay_db_per_s * dt) / 20.0)
         self._meter_level_1 *= decay
         self._meter_level_2 *= decay
+        peak_decay = 10.0 ** (-(self._meter_peak_decay_db_per_s * dt) / 20.0)
+        if now >= self._meter_peak_hold_until_1:
+            self._meter_peak_1 *= peak_decay
+        if now >= self._meter_peak_hold_until_2:
+            self._meter_peak_2 *= peak_decay
+        self._meter_peak_1 = max(self._meter_peak_1, self._meter_level_1)
+        self._meter_peak_2 = max(self._meter_peak_2, self._meter_level_2)
         dbfs_1 = self._amp_to_dbfs(self._meter_level_1) + self._meter_dbfs_offset
         dbfs_2 = self._amp_to_dbfs(self._meter_level_2) + self._meter_dbfs_offset
-        self.level_meter.set_levels_db(dbfs_1, dbfs_2)
+        peak_dbfs_1 = self._amp_to_dbfs(self._meter_peak_1) + self._meter_dbfs_offset
+        peak_dbfs_2 = self._amp_to_dbfs(self._meter_peak_2) + self._meter_dbfs_offset
+        self.level_meter.set_levels_db(dbfs_1, dbfs_2, peak_dbfs_1, peak_dbfs_2)
         self._push_meter_label_samples(now, dbfs_1, dbfs_2)
         avg_dbfs_1 = self._mean_dbfs(self._meter_label_hist_1, dbfs_1)
         avg_dbfs_2 = self._mean_dbfs(self._meter_label_hist_2, dbfs_2)
@@ -393,7 +415,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 vals = unpack_q97_values(data, order)
                 if vals:
                     self.xbar_tab.apply_state_dict(vals)
-                    applied.append('Output Cross Bar')
+                    applied.append('Digital Output Cross Bar')
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Load From Device', f'Failed to read device: {e}')
             return

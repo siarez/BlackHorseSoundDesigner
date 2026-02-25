@@ -10,8 +10,11 @@ from app.eqcore import (
     default_freq_grid, sos_response_db
 )
 from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify
-from ..device_interface.cdc_link import auto_detect_port
-from ..device_interface.device_link_manager import get_device_link_manager
+from ..device_interface.device_write_manager import (
+    JournalWrite,
+    build_i2c32_payload,
+    get_device_write_manager,
+)
 from ..device_interface.record_ids import (
     TYPE_COEFF,
     TYPE_APP_STATE,
@@ -24,7 +27,7 @@ from ..device_interface.state_sidecar import pack_eq_state
 class EqTab(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
-        self._link_mgr = get_device_link_manager()
+        self._writer = get_device_write_manager()
         # Show 14 user-configurable biquads; BQ15 is reserved for Stage Gain (computed only)
         self._num_sections = 14
 
@@ -473,51 +476,32 @@ class EqTab(QtWidgets.QWidget):
                 val_u32 = _u32_from(tag, eq_stage, stage=True)
                 section_items[current].append((page_i, sub_i, val_u32))
 
-        # Pack and send each section as a 0x52 journal 32-bit stream (i2c7 + chunks)
-        port = auto_detect_port()
-        if not port:
-            QtWidgets.QMessageBox.warning(self, 'EQ', 'No device found (auto-detect failed)')
+        writes: list[JournalWrite] = []
+        for sec, items in section_items.items():
+            if not items:
+                continue
+            writes.append(
+                JournalWrite(
+                    typ=TYPE_COEFF,
+                    rec_id=targets[sec],
+                    payload=build_i2c32_payload(items),
+                    label=sec,
+                )
+            )
+        try:
+            side = pack_eq_state(self.to_state_dict(), int(self._fs))
+            writes.append(JournalWrite(TYPE_APP_STATE, REC_STATE_EQ, side, "STATE EQ"))
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, 'EQ', f'Failed to build EQ sidecar: {e}')
             return
-        def _send(link) -> int:
-            total_sections = 0; errs = 0
-            for sec, items in section_items.items():
-                if not items:
-                    continue
-                total_sections += 1
-                # Build payload: [i2c7] + 0xFD page + 0x80|reg + 4 bytes ...
-                payload = bytearray()
-                payload.append(0x4A)  # i2c7 (ignored by firmware but kept for consistency)
-                cur_page = None
-                for page_i, sub_i, val_u32 in items:
-                    if page_i != cur_page:
-                        payload.append(0xFD); payload.append(page_i & 0xFF)
-                        cur_page = page_i
-                    payload.append(0x80 | (sub_i & 0x7F))
-                    payload.append((val_u32 >> 24) & 0xFF)
-                    payload.append((val_u32 >> 16) & 0xFF)
-                    payload.append((val_u32 >> 8) & 0xFF)
-                    payload.append(val_u32 & 0xFF)
-                # Send via journal (type 0x52, id per section); firmware applies immediately
-                rec_id = targets[sec]
-                ok, pre_lines = link.jwrb_with_log(TYPE_COEFF, rec_id, bytes(payload))
-                if not ok:
-                    errs += 1
-            # Also write compact sidecar (0x53) for UI state
-            try:
-                side = pack_eq_state(self.to_state_dict(), int(self._fs))
-                _ok2, _ = link.jwrb_with_log(TYPE_APP_STATE, REC_STATE_EQ, side)
-                # do not count sidecar failure against coeff apply; it's non-critical
-            except Exception:
-                pass
-            return errs
 
         try:
-            errs = self._link_mgr.run(_send, port=port, auto=False)
+            res = self._writer.apply(writes, auto=True)
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'EQ', f'Failed to open {port}: {e}')
+            QtWidgets.QMessageBox.critical(self, 'EQ', f'Failed to write device: {e}')
             return
 
-        if errs == 0:
+        if res.ok:
             notify(self, 'EQ coefficients saved + applied')
         else:
-            QtWidgets.QMessageBox.warning(self, 'EQ', f'Completed with {errs} journal write errors')
+            QtWidgets.QMessageBox.warning(self, 'EQ', f'Completed with write errors: {", ".join(res.failed)}')

@@ -10,10 +10,15 @@ class _NotchedProgressBar(QtWidgets.QProgressBar):
         self._max_db = 0.0
         self._major_step_db = 10.0
         self._minor_step_db = 5.0
+        self._peak01 = 0.0
 
     def set_db_range(self, min_db: float, max_db: float):
         self._min_db = float(min_db)
         self._max_db = float(max_db)
+        self.update()
+
+    def set_peak_level(self, peak01: float):
+        self._peak01 = max(0.0, min(1.0, float(peak01)))
         self.update()
 
     def paintEvent(self, event):
@@ -51,6 +56,13 @@ class _NotchedProgressBar(QtWidgets.QProgressBar):
             p.setPen(major_pen)
             p.drawLine(rect.left(), y, rect.right(), y)
             db += self._major_step_db
+
+        # Peak hold marker (thin cap line)
+        peak_y = rect.bottom() - int(self._peak01 * rect.height())
+        peak_pen = QtGui.QPen(QtGui.QColor('#f5f5f5'))
+        peak_pen.setWidth(2)
+        p.setPen(peak_pen)
+        p.drawLine(rect.left(), peak_y, rect.right(), peak_y)
 
 
 class _ScaleCanvas(QtWidgets.QWidget):
@@ -140,6 +152,7 @@ class _VBar(QtWidgets.QWidget):
     def set_level(self, v01: float):
         v = int(max(0.0, min(1.0, float(v01))) * 1000)
         self.bar.setValue(v)
+        self.bar.set_peak_level(v01)
         # Simple color zones
         if v < 700:
             self._set_color('#3cb371')  # greenish
@@ -148,9 +161,10 @@ class _VBar(QtWidgets.QWidget):
         else:
             self._set_color('#e74c3c')  # red
 
-    def set_level_with_db(self, v01: float, dbfs: float):
+    def set_level_with_db(self, v01: float, dbfs: float, peak01: float | None = None):
         v = int(max(0.0, min(1.0, float(v01))) * 1000)
         self.bar.setValue(v)
+        self.bar.set_peak_level(v01 if peak01 is None else peak01)
         db = float(dbfs)
         # Color zones are based on dBFS thresholds only.
         if db < -60.0:
@@ -243,9 +257,17 @@ class LevelMeterWidget(QtWidgets.QWidget):
         self.scale_col.set_db_range(self._min_db, self._max_db)
         self.right_bar.set_db_range(self._min_db, self._max_db)
 
-    def set_levels_db(self, left_db: float, right_db: float):
+    def set_levels_db(
+        self,
+        left_db: float,
+        right_db: float,
+        left_peak_db: float | None = None,
+        right_peak_db: float | None = None,
+    ):
         span = max(1e-6, self._max_db - self._min_db)
         l01 = (float(left_db) - self._min_db) / span
         r01 = (float(right_db) - self._min_db) / span
-        self.left_bar.set_level_with_db(l01, left_db)
-        self.right_bar.set_level_with_db(r01, right_db)
+        lp01 = l01 if left_peak_db is None else (float(left_peak_db) - self._min_db) / span
+        rp01 = r01 if right_peak_db is None else (float(right_peak_db) - self._min_db) / span
+        self.left_bar.set_level_with_db(l01, left_db, lp01)
+        self.right_bar.set_level_with_db(r01, right_db, rp01)

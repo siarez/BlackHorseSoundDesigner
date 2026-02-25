@@ -2,20 +2,19 @@ from __future__ import annotations
 from PySide6 import QtWidgets, QtCore, QtGui
 
 from .util import q_to_hex_twos, notify
-from ..device_interface.cdc_link import auto_detect_port
-from ..device_interface.device_link_manager import get_device_link_manager
-from ..device_interface.record_ids import TYPE_COEFF, TYPE_APP_STATE, REC_OUT_GAINS, REC_STATE_XBAR
+from ..device_interface.device_write_manager import (
+    JournalWrite,
+    build_i2c32_payload,
+    get_device_write_manager,
+)
+from ..device_interface.record_ids import TYPE_COEFF, TYPE_APP_STATE, REC_OUT_GAINS_DIG, REC_STATE_XBAR
 from ..device_interface.state_sidecar import pack_q97_values
 from pathlib import Path
 import json as _json
 
 
 class OutputCrossbarTab(QtWidgets.QWidget):
-    """UI for OUTPUT CROSS BAR gains (Q9.23).
-
-    Map entries include both Digital* and Analog* routes. Defaults in PF5 are
-    1.0 for direct L->L and R->R, and 0.0 otherwise.
-    """
+    """UI for digital OUTPUT CROSS BAR gains (Q9.23)."""
 
     NAMES = [
         # Digital outputs
@@ -25,18 +24,11 @@ class OutputCrossbarTab(QtWidgets.QWidget):
         "DigitalRightfromLeft",
         "DigitalRightfromRight",
         "DigitalRightfromSub",
-        # Analog outputs
-        "AnalogLeftfromLeft",
-        "AnalogLeftfromRight",
-        "AnalogLeftfromSub",
-        "AnalogRightfromLeft",
-        "AnalogRightfromRight",
-        "AnalogRightfromSub",
     ]
 
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
-        self._link_mgr = get_device_link_manager()
+        self._writer = get_device_write_manager()
 
         root = QtWidgets.QHBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -47,7 +39,7 @@ class OutputCrossbarTab(QtWidgets.QWidget):
         vleft = QtWidgets.QVBoxLayout(left)
         vleft.setContentsMargins(0, 0, 0, 0)
         vleft.setSpacing(6)
-        gb = QtWidgets.QGroupBox("OUTPUT CROSS BAR (Q9.23 two's complement)")
+        gb = QtWidgets.QGroupBox("OUTPUT CROSS BAR Digital (Q9.23 two's complement)")
         v = QtWidgets.QVBoxLayout(gb)
         self.txt_hex = QtWidgets.QPlainTextEdit()
         self.txt_hex.setReadOnly(True)
@@ -80,7 +72,7 @@ class OutputCrossbarTab(QtWidgets.QWidget):
             s.valueChanged.connect(self._refresh_hex)
             return s
 
-        # Defaults (from JSON): L->L and R->R are 1.0; others 0.0
+        # Defaults: L->L and R->R are 1.0; others 0.0
         defaults = {
             "DigitalLeftfromLeft": 1.0,
             "DigitalLeftfromRight": 0.0,
@@ -88,12 +80,6 @@ class OutputCrossbarTab(QtWidgets.QWidget):
             "DigitalRightfromLeft": 0.0,
             "DigitalRightfromRight": 1.0,
             "DigitalRightfromSub": 0.0,
-            "AnalogLeftfromLeft": 1.0,
-            "AnalogLeftfromRight": 0.0,
-            "AnalogLeftfromSub": 0.0,
-            "AnalogRightfromLeft": 0.0,
-            "AnalogRightfromRight": 0.0,
-            "AnalogRightfromSub": 1.0,
         }
 
         row = 0
@@ -105,8 +91,8 @@ class OutputCrossbarTab(QtWidgets.QWidget):
             row += 1
 
         # Send button at bottom-left for consistency
-        self.btn_send = QtWidgets.QPushButton("Send Output Cross Bar to Device")
-        self.btn_send.setToolTip("Send OUTPUT CROSS BAR (Q9.23) to TAS3251 via journal")
+        self.btn_send = QtWidgets.QPushButton("Send Digital Output Cross Bar to Device")
+        self.btn_send.setToolTip("Send digital OUTPUT CROSS BAR routes (Q9.23) to TAS3251 via journal")
         self.btn_send.clicked.connect(self._on_send)
         vleft.addStretch(1)
         vleft.addWidget(self.btn_send)
@@ -184,44 +170,32 @@ class OutputCrossbarTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, 'Output Cross Bar', 'No OUTPUT CROSS BAR map entries found to send')
             return
 
-        port = auto_detect_port()
-        if not port:
-            QtWidgets.QMessageBox.warning(self, 'Output Cross Bar', 'No device found (auto-detect failed)')
+        writes = [
+            JournalWrite(
+                typ=TYPE_COEFF,
+                rec_id=REC_OUT_GAINS_DIG,
+                payload=build_i2c32_payload(items),
+                label="OUTPUT CROSS BAR DIGITAL",
+            )
+        ]
+        try:
+            order = list(self.NAMES)
+            side = pack_q97_values(order, self.to_state_dict())
+            writes.append(JournalWrite(TYPE_APP_STATE, REC_STATE_XBAR, side, "STATE XBAR"))
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, 'Output Cross Bar', f'Failed to build xbar sidecar: {e}')
             return
-        def _send(link) -> tuple[bool, list[str]]:
-            payload = bytearray()
-            payload.append(0x4A)
-            cur_page = None
-            for page_i, sub_i, val_u32 in items:
-                if page_i != cur_page:
-                    payload.append(0xFD); payload.append(page_i & 0xFF)
-                    cur_page = page_i
-                payload.append(0x80 | (sub_i & 0x7F))
-                payload.append((val_u32 >> 24) & 0xFF)
-                payload.append((val_u32 >> 16) & 0xFF)
-                payload.append((val_u32 >> 8) & 0xFF)
-                payload.append(val_u32 & 0xFF)
-            ok, lines = link.jwrb_with_log(TYPE_COEFF, REC_OUT_GAINS, bytes(payload))
-            # Sidecar
-            try:
-                order = list(self.NAMES)
-                side = pack_q97_values(order, self.to_state_dict())
-                _ok2, _ = link.jwrb_with_log(TYPE_APP_STATE, REC_STATE_XBAR, side)
-            except Exception:
-                pass
-            return ok, lines
 
         try:
-            ok, lines = self._link_mgr.run(_send, port=port, auto=False)
+            res = self._writer.apply(writes, auto=True)
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'Output Cross Bar', f'Failed to open {port}: {e}')
+            QtWidgets.QMessageBox.critical(self, 'Output Cross Bar', f'Failed to write device: {e}')
             return
 
-        if ok:
-            applies = [ln for ln in lines if ln.startswith('OK APPLY') or ln.startswith('ERR APPLY')]
+        if res.ok:
             msg = 'Output Cross Bar saved + applied'
-            if applies:
-                msg += " — " + " | ".join(applies)
+            if res.apply_logs:
+                msg += " — " + " | ".join(res.apply_logs)
             notify(self, msg)
         else:
-            QtWidgets.QMessageBox.warning(self, 'Output Cross Bar', 'Journal write failed')
+            QtWidgets.QMessageBox.warning(self, 'Output Cross Bar', f'Journal write failed: {", ".join(res.failed)}')

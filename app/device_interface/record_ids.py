@@ -34,8 +34,8 @@ REC_INTGAIN_R: int = 0x0C      # RIGHT INTGAIN BQ
 # Input Mixer
 REC_INPUT_MIXER: int = 0x10    # INPUT MIXER (LefttoLeft/RighttoLeft/LefttoRight/RighttoRight)
 
-# Future expansion: 0x11..0x1F reserved
 REC_MIX_GAIN: int = 0x11       # MIX/GAIN ADJUST (LefttoSub/RighttoSub/SubMixScratch*/BassMono*)
+REC_OUT_GAINS_DIG: int = 0x12  # OUTPUT CROSS BAR (Digital* routes only)
 
 # UI App State sidecar (type 0x53). Inert at boot; used for Load From Device.
 REC_STATE_EQ: int = 0x90
