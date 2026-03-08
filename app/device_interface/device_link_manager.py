@@ -185,6 +185,23 @@ class DeviceLinkManager:
             if u and u in self._uid_to_port:
                 self._default_uid = u
 
+    def update_cached_name(self, uid: str, name: str):
+        """Update cached board name for a known UID (used after rename writes)."""
+        u = (uid or "").strip().upper()
+        if not u:
+            return
+        n = str(name or "")
+        with self._meta_lock:
+            port = self._uid_to_port.get(u, "")
+            if not port:
+                for d in self._devices:
+                    if str(d.get("uid", "")).upper() == u:
+                        port = str(d.get("port", ""))
+                        break
+            if not port:
+                return
+            self._identity_cache[port] = (u, n)
+
     def default_uid(self) -> str:
         with self._meta_lock:
             return self._default_uid

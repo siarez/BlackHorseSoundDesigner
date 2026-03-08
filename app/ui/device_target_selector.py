@@ -16,19 +16,18 @@ class DeviceTargetSelector(QtWidgets.QWidget):
         self._checks: dict[str, QtWidgets.QCheckBox] = {}
         self._uids_order: list[str] = []
 
-        self._root = QtWidgets.QHBoxLayout(self)
+        self._root = QtWidgets.QVBoxLayout(self)
         self._root.setContentsMargins(0, 0, 0, 0)
-        self._root.setSpacing(6)
+        self._root.setSpacing(2)
 
         self._label = QtWidgets.QLabel("Targets:")
         self._root.addWidget(self._label)
 
         self._box = QtWidgets.QWidget(self)
-        self._box_l = QtWidgets.QHBoxLayout(self._box)
+        self._box_l = QtWidgets.QVBoxLayout(self._box)
         self._box_l.setContentsMargins(0, 0, 0, 0)
-        self._box_l.setSpacing(8)
+        self._box_l.setSpacing(2)
         self._root.addWidget(self._box)
-        self._root.addStretch(1)
 
         self.setVisible(False)
 
@@ -45,22 +44,24 @@ class DeviceTargetSelector(QtWidgets.QWidget):
         self._checks.clear()
         self._uids_order = []
 
-        responsive_count = sum(1 for d in devices if str(d.get("status", "responsive")).lower() == "responsive" and str(d.get("uid", "")).strip())
-        if responsive_count <= 1:
+        responsive = [
+            d for d in devices
+            if str(d.get("status", "responsive")).lower() == "responsive" and str(d.get("uid", "")).strip()
+        ]
+        responsive_count = len(responsive)
+        if responsive_count == 0:
             self.setVisible(False)
             self.selectionChanged.emit()
             return
 
         self.setVisible(True)
-        for d in devices:
-            if str(d.get("status", "responsive")).lower() != "responsive":
-                continue
+        single = (responsive_count == 1)
+        for d in responsive:
             uid = (d.get("uid") or "").strip().upper()
-            if not uid:
-                continue
             title = d.get("display") or uid[-5:]
             cb = QtWidgets.QCheckBox(title)
-            cb.setChecked(old_states.get(uid, True))
+            cb.setChecked(True if single else old_states.get(uid, True))
+            cb.setEnabled(not single)
             cb.toggled.connect(self.selectionChanged)
             self._box_l.addWidget(cb)
             self._checks[uid] = cb

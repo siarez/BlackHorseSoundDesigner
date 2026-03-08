@@ -395,6 +395,9 @@ class GeneralTab(QtWidgets.QWidget):
             return
 
         if res.ok:
+            clean_name = sanitize_board_name(raw, max_len=25)
+            self._link_mgr.update_cached_name(uid, clean_name)
+            self.set_board_name(clean_name)
             self.lbl_status.setText("Board name saved to device.")
             notify(self, "Board name saved to device.")
             # Trigger a refresh to update duplicate-name disambiguation/display labels.
