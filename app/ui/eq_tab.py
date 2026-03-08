@@ -9,7 +9,8 @@ from app.eqcore import (
     FilterType, BiquadParams, design_biquad,
     default_freq_grid, sos_response_db
 )
-from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify
+from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify, LEFT_SIDEBAR_WIDTH
+from .device_target_selector import DeviceTargetSelector
 from ..device_interface.device_write_manager import (
     JournalWrite,
     build_i2c32_payload,
@@ -28,6 +29,7 @@ class EqTab(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
         self._writer = get_device_write_manager()
+        self._target_devices: list[dict[str, str]] = []
         # Show 14 user-configurable biquads; BQ15 is reserved for Stage Gain (computed only)
         self._num_sections = 14
 
@@ -37,6 +39,7 @@ class EqTab(QtWidgets.QWidget):
 
         # Left: coefficients readout
         left = QtWidgets.QWidget()
+        left.setFixedWidth(LEFT_SIDEBAR_WIDTH)
         vleft = QtWidgets.QVBoxLayout(left)
         vleft.setContentsMargins(0, 0, 0, 0)
         vleft.setSpacing(0)
@@ -46,6 +49,9 @@ class EqTab(QtWidgets.QWidget):
         self.btn_send_eq = QtWidgets.QPushButton("Send EQ to Device")
         self.btn_send_eq.setToolTip("Send current EQ coefficients + Stage Gain to TAS3251 and save in journal")
         self.btn_send_eq.clicked.connect(self._on_send_eq)
+        self.target_selector = DeviceTargetSelector(self)
+        self.target_selector.selectionChanged.connect(self._update_send_enabled)
+        vleft.addWidget(self.target_selector)
         vleft.addWidget(self.btn_send_eq)
         root.addWidget(left, 0)
 
@@ -73,6 +79,31 @@ class EqTab(QtWidgets.QWidget):
         self._init_fixed_rows()
         self.table.selectRow(0)
         self._update_plot()
+        self._update_send_enabled()
+
+    def set_target_devices(self, devices: list[dict[str, str]]):
+        self._target_devices = [dict(d) for d in (devices or [])]
+        self.target_selector.set_devices(self._target_devices)
+        self._update_send_enabled()
+
+    def _selected_ports(self) -> list[str]:
+        if not self.target_selector.isVisible():
+            return []
+        by_uid = {str(d.get("uid", "")).upper(): str(d.get("port", "")) for d in self._target_devices}
+        out: list[str] = []
+        for uid in self.target_selector.selected_uids():
+            p = by_uid.get(uid.upper(), "")
+            if p:
+                out.append(p)
+        return out
+
+    def _update_send_enabled(self):
+        if not self._target_devices:
+            self.btn_send_eq.setEnabled(False)
+        elif self.target_selector.isVisible():
+            self.btn_send_eq.setEnabled(self.target_selector.has_selection())
+        else:
+            self.btn_send_eq.setEnabled(True)
 
     def set_fs(self, fs: float):
         if abs(fs - getattr(self, '_fs', 48000.0)) > 1e-9:
@@ -495,8 +526,9 @@ class EqTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, 'EQ', f'Failed to build EQ sidecar: {e}')
             return
 
+        ports = self._selected_ports()
         try:
-            res = self._writer.apply(writes, auto=True)
+            res = self._writer.apply(writes, ports=ports, auto=not bool(ports))
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'EQ', f'Failed to write device: {e}')
             return

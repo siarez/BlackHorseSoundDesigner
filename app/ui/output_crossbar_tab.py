@@ -1,7 +1,8 @@
 from __future__ import annotations
 from PySide6 import QtWidgets, QtCore, QtGui
 
-from .util import q_to_hex_twos, notify
+from .util import q_to_hex_twos, notify, LEFT_SIDEBAR_WIDTH
+from .device_target_selector import DeviceTargetSelector
 from ..device_interface.device_write_manager import (
     JournalWrite,
     build_i2c32_payload,
@@ -29,6 +30,7 @@ class OutputCrossbarTab(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
         self._writer = get_device_write_manager()
+        self._target_devices: list[dict[str, str]] = []
 
         root = QtWidgets.QHBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -36,6 +38,7 @@ class OutputCrossbarTab(QtWidgets.QWidget):
 
         # Left: hex readout
         left = QtWidgets.QWidget()
+        left.setFixedWidth(LEFT_SIDEBAR_WIDTH)
         vleft = QtWidgets.QVBoxLayout(left)
         vleft.setContentsMargins(0, 0, 0, 0)
         vleft.setSpacing(6)
@@ -94,11 +97,39 @@ class OutputCrossbarTab(QtWidgets.QWidget):
         self.btn_send = QtWidgets.QPushButton("Send Digital Output Cross Bar to Device")
         self.btn_send.setToolTip("Send digital OUTPUT CROSS BAR routes (Q9.23) to TAS3251 via journal")
         self.btn_send.clicked.connect(self._on_send)
+        self.target_selector = DeviceTargetSelector(self)
+        self.target_selector.selectionChanged.connect(self._update_send_enabled)
         vleft.addStretch(1)
+        vleft.addWidget(self.target_selector)
         vleft.addWidget(self.btn_send)
         root.addWidget(right, 1)
 
         self._refresh_hex()
+        self._update_send_enabled()
+
+    def set_target_devices(self, devices: list[dict[str, str]]):
+        self._target_devices = [dict(d) for d in (devices or [])]
+        self.target_selector.set_devices(self._target_devices)
+        self._update_send_enabled()
+
+    def _selected_ports(self) -> list[str]:
+        if not self.target_selector.isVisible():
+            return []
+        by_uid = {str(d.get("uid", "")).upper(): str(d.get("port", "")) for d in self._target_devices}
+        out: list[str] = []
+        for uid in self.target_selector.selected_uids():
+            p = by_uid.get(uid.upper(), "")
+            if p:
+                out.append(p)
+        return out
+
+    def _update_send_enabled(self):
+        if not self._target_devices:
+            self.btn_send.setEnabled(False)
+        elif self.target_selector.isVisible():
+            self.btn_send.setEnabled(self.target_selector.has_selection())
+        else:
+            self.btn_send.setEnabled(True)
 
     # ---------------- State (Save/Load) ----------------
     def to_state_dict(self) -> dict:
@@ -186,8 +217,9 @@ class OutputCrossbarTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, 'Output Cross Bar', f'Failed to build xbar sidecar: {e}')
             return
 
+        ports = self._selected_ports()
         try:
-            res = self._writer.apply(writes, auto=True)
+            res = self._writer.apply(writes, ports=ports, auto=not bool(ports))
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Output Cross Bar', f'Failed to write device: {e}')
             return

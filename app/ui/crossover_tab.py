@@ -10,7 +10,8 @@ from app.eqcore import (
     sos_response_complex, cascade_response_complex,
     design_first_order_lpf, design_first_order_hpf,
 )
-from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify
+from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify, LEFT_SIDEBAR_WIDTH
+from .device_target_selector import DeviceTargetSelector
 from ..device_interface.device_write_manager import (
     JournalWrite,
     build_i2c32_payload,
@@ -32,6 +33,7 @@ class CrossoverTab(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None):
         super().__init__(parent)
         self._writer = get_device_write_manager()
+        self._target_devices: list[dict[str, str]] = []
 
         self._xo_num_sections = 5
 
@@ -42,6 +44,7 @@ class CrossoverTab(QtWidgets.QWidget):
 
         # Left pane: coefficients readouts
         left = QtWidgets.QWidget()
+        left.setFixedWidth(LEFT_SIDEBAR_WIDTH)
         left_v = QtWidgets.QVBoxLayout(left)
         left_v.setContentsMargins(0, 0, 0, 0)
         left_v.setSpacing(6)
@@ -101,6 +104,9 @@ class CrossoverTab(QtWidgets.QWidget):
 
         # Push the send button to the bottom for a consistent layout (like EQ tab)
         left_v.addStretch(1)
+        self.target_selector = DeviceTargetSelector(self)
+        self.target_selector.selectionChanged.connect(self._update_send_enabled)
+        left_v.addWidget(self.target_selector)
         left_v.addWidget(self.btn_send_xo)
 
         root.addWidget(left, 0)
@@ -273,6 +279,31 @@ class CrossoverTab(QtWidgets.QWidget):
         self._update_xo_plots()
         self._update_delay_labels()
         self._update_gain_labels()
+        self._update_send_enabled()
+
+    def set_target_devices(self, devices: list[dict[str, str]]):
+        self._target_devices = [dict(d) for d in (devices or [])]
+        self.target_selector.set_devices(self._target_devices)
+        self._update_send_enabled()
+
+    def _selected_ports(self) -> list[str]:
+        if not self.target_selector.isVisible():
+            return []
+        by_uid = {str(d.get("uid", "")).upper(): str(d.get("port", "")) for d in self._target_devices}
+        out: list[str] = []
+        for uid in self.target_selector.selected_uids():
+            p = by_uid.get(uid.upper(), "")
+            if p:
+                out.append(p)
+        return out
+
+    def _update_send_enabled(self):
+        if not self._target_devices:
+            self.btn_send_xo.setEnabled(False)
+        elif self.target_selector.isVisible():
+            self.btn_send_xo.setEnabled(self.target_selector.has_selection())
+        else:
+            self.btn_send_xo.setEnabled(True)
 
     def set_fs(self, fs: float):
         if abs(fs - getattr(self, '_fs', 48000.0)) > 1e-9:
@@ -437,10 +468,9 @@ class CrossoverTab(QtWidgets.QWidget):
         spin_q.valueChanged.connect(self._update_xo_plots)
         table.setCellWidget(row, 4, spin_q)
 
-        # Ripple (per BQ). Not used in Phase shift.
-        # This control serves as Ripple (dB) for Chebyshev, Q for Phase shift 2nd, and Gain (dB) for Peaking EQ.
+        # Ripple (per BQ): used for Chebyshev ripple and Peaking/Shelf gain.
         spin_ripple = mk_dspin(0.01, 3.0, 0.50, 0.10, " dB", 2)
-        spin_ripple.setToolTip("Chebyshev ripple (dB); acts as Q for Phase shift 2nd; acts as Gain (dB) for Peaking EQ.")
+        spin_ripple.setToolTip("Chebyshev ripple (dB); acts as Gain (dB) for Peaking EQ and Shelves.")
         spin_ripple.valueChanged.connect(self._update_xo_plots)
         table.setCellWidget(row, 5, spin_ripple)
 
@@ -479,7 +509,7 @@ class CrossoverTab(QtWidgets.QWidget):
             w_topo.setEnabled(not (is_ap or mode.startswith('phase shift') or mode.startswith('peaking') or mode.startswith('low shelf') or mode.startswith('high shelf')))
         if w_q:
             enable_q = False
-            if mode.startswith('peaking') or mode.startswith('low shelf') or mode.startswith('high shelf'):
+            if mode.startswith('phase shift 2nd') or mode.startswith('peaking') or mode.startswith('low shelf') or mode.startswith('high shelf'):
                 enable_q = True
             elif (mode.startswith('low') or mode.startswith('high')):
                 cb_topo = table.cellWidget(row, 2)
@@ -490,17 +520,7 @@ class CrossoverTab(QtWidgets.QWidget):
             # Frequency enabled for all except All-pass (unity)
             w_fc.setEnabled(not is_ap)
         if w_ripple:
-            if mode.startswith('phase shift 2nd'):
-                # Use Ripple control as Q for Phase shift 2nd
-                w_ripple.setEnabled(True)
-                w_ripple.setSuffix(" Q")
-                try:
-                    w_ripple.setRange(0.10, 10.0)
-                    w_ripple.setSingleStep(0.10)
-                    w_ripple.setDecimals(2)
-                except Exception:
-                    pass
-            elif mode.startswith('peaking') or mode.startswith('low shelf') or mode.startswith('high shelf'):
+            if mode.startswith('peaking') or mode.startswith('low shelf') or mode.startswith('high shelf'):
                 # Use Ripple control as Gain (dB) for Peaking EQ and Shelves
                 w_ripple.setEnabled(True)
                 w_ripple.setSuffix(" dB")
@@ -549,8 +569,8 @@ class CrossoverTab(QtWidgets.QWidget):
             # 1st-order all-pass using center frequency only
             sos = design_biquad(BiquadParams(typ=FilterType.ALLPASS1, fs=self._fs, f0=fc, q=1.0, gain_db=0.0))
         elif mode.lower().startswith('phase shift 2nd'):
-            # 2nd-order all-pass using Q from the Ripple/Q control
-            qv = max(1e-3, float(table.cellWidget(row, 3).value()))
+            # 2nd-order all-pass using dedicated Q column.
+            qv = max(1e-3, q_user)
             sos = design_biquad(BiquadParams(typ=FilterType.ALLPASS2, fs=self._fs, f0=fc, q=qv, gain_db=0.0))
         else:
             mode_l = mode.lower()
@@ -837,15 +857,16 @@ class CrossoverTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, 'Crossover', f'Failed to build XO sidecar: {e}')
             return
 
+        ports = self._selected_ports()
         try:
-            res = self._writer.apply(writes, auto=True)
+            res = self._writer.apply(writes, ports=ports, auto=not bool(ports))
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Crossover', f'Failed to write device: {e}')
             return
 
         coeff_labels = {"CROSS OVER BQs", "SUB CROSS OVER BQs", "PHASE OPTIMIZER", "OUTPUT CROSS BAR"}
         sent_coeff = any(w.label in coeff_labels for w in writes)
-        coeff_failures = [name for name in res.failed if name in coeff_labels]
+        coeff_failures = [name for name in res.failed if any(lbl in name for lbl in coeff_labels)]
 
         if sent_coeff and not coeff_failures:
             msg = 'Crossover coefficients saved + applied'

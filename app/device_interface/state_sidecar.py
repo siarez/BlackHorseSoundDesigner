@@ -11,9 +11,12 @@ EQ (REC_STATE_EQ = 0x90):
     [type u8][f0_u16][q_u8][gain_qdb_i8]
 
 XO (REC_STATE_XO = 0x91):
-  [ver u8=1][fs_u16][cntA u8][cntB u8]
-  A rows: repeat cntA: [mode u8][topo u8][f0_u16][q_u8][rip_u8]
-  B rows: repeat cntB: [mode u8][topo u8][f0_u16][q_u8][rip_u8]
+  [ver u8][fs_u16][cntA u8][cntB u8]
+  A rows: repeat cntA: [mode u8][topo u8][f0_u16][q_u8][aux_u8]
+  B rows: repeat cntB: [mode u8][topo u8][f0_u16][q_u8][aux_u8]
+    - v2 encoding (only supported format):
+        peaking/low shelf/high shelf -> signed gain (i8, 0.25 dB step)
+        others -> ripple (0..3 dB)
   Misc: [flags u8][delayA u8][delayB u8][gainA_qdb_i8][gainB_qdb_i8]
     flags: bit0 invertA, bit1 invertB
 
@@ -26,6 +29,9 @@ MIX/GAIN (REC_STATE_MIXGAIN = 0x93):
 
 XBAR (REC_STATE_XBAR = 0x94):
   [ver u8=1][n u8] then n x i16 (Q9.7) in fixed name order provided by caller
+
+BOARD NAME (REC_STATE_BOARD_NAME = 0x95):
+  [ver u8=1][len u8 <= 25][ascii bytes]
 """
 
 from typing import List, Dict, Tuple
@@ -130,6 +136,8 @@ XO_MODE_TEXTS: List[str] = [
     "Low-pass",
     "High-pass",
     "Peaking EQ",
+    "Low Shelf",
+    "High Shelf",
 ]
 
 XO_TOPO_TEXTS: List[str] = [
@@ -192,7 +200,7 @@ def pack_xo_state(xo: Dict, fs_hz: int = 48000) -> bytes:
     A = xo.get("A", []) or []
     B = xo.get("B", []) or []
     out = bytearray()
-    out.append(1)
+    out.append(2)
     out.extend(_int_to_u16_le(int(fs_hz)))
     out.append(min(255, len(A)) & 0xFF)
     out.append(min(255, len(B)) & 0xFF)
@@ -208,9 +216,13 @@ def pack_xo_state(xo: Dict, fs_hz: int = 48000) -> bytes:
             tcode = 0
         f0 = _f0_to_u16_hz(ent.get("f0", 2000.0))
         q8 = _q_to_u8(ent.get("q", 0.707))
-        r8 = _ripple_to_u8(ent.get("ripple_db", 0.5))
+        mlow = str(m).lower()
+        if mlow.startswith("peaking") or mlow.startswith("low shelf") or mlow.startswith("high shelf"):
+            aux = _db_to_i8_q25(ent.get("ripple_db", 0.0))
+        else:
+            aux = _ripple_to_u8(ent.get("ripple_db", 0.5))
         b0, b1 = _int_to_u16_le(f0)
-        return [mcode & 0xFF, tcode & 0xFF, b0, b1, q8 & 0xFF, r8 & 0xFF]
+        return [mcode & 0xFF, tcode & 0xFF, b0, b1, q8 & 0xFF, aux & 0xFF]
     for ent in A:
         out.extend(_row(ent))
     for ent in B:
@@ -228,6 +240,9 @@ def pack_xo_state(xo: Dict, fs_hz: int = 48000) -> bytes:
 def unpack_xo_state(data: bytes) -> Dict:
     if not data or len(data) < 6:
         return {"fs": 48000, "A": [], "B": [], "misc": {}}
+    ver = int(data[0])
+    if ver != 2:
+        return {"fs": 48000, "A": [], "B": [], "misc": {}}
     fs = _u16_to_int(data[1], data[2])
     cntA = data[3]; cntB = data[4]
     idx = 5
@@ -239,11 +254,16 @@ def unpack_xo_state(data: bytes) -> Dict:
                 break
             mcode = data[idx]; tcode = data[idx+1]
             f0 = _u16_to_int(data[idx+2], data[idx+3])
-            q8 = data[idx+4]; r8 = data[idx+5]
+            q8 = data[idx+4]; aux = data[idx+5]
             idx += 6
             mtxt = XO_MODE_TEXTS[mcode] if 0 <= mcode < len(XO_MODE_TEXTS) else XO_MODE_TEXTS[0]
             ttxt = XO_TOPO_TEXTS[tcode] if 0 <= tcode < len(XO_TOPO_TEXTS) else XO_TOPO_TEXTS[0]
-            rows.append({"mode": mtxt, "topology": ttxt, "f0": float(f0), "q": _u8_to_q(q8), "ripple_db": _u8_to_ripple(r8)})
+            mlow = mtxt.lower()
+            if mlow.startswith("peaking") or mlow.startswith("low shelf") or mlow.startswith("high shelf"):
+                val = _i8_q25_to_db(aux)
+            else:
+                val = _u8_to_ripple(aux)
+            rows.append({"mode": mtxt, "topology": ttxt, "f0": float(f0), "q": _u8_to_q(q8), "ripple_db": val})
         return rows
     A = _read_rows(cntA)
     B = _read_rows(cntB)
@@ -283,3 +303,38 @@ def unpack_q97_values(data: bytes, order: List[str]) -> Dict[str, float]:
         idx += 2
     return out
 
+
+# ---- Board name (ASCII, max 25 chars) ----
+
+def sanitize_board_name(name: str, max_len: int = 25) -> str:
+    s = (name or "")
+    if len(s) > max_len:
+        s = s[:max_len]
+    # Keep printable ASCII only.
+    s = "".join(ch for ch in s if 0x20 <= ord(ch) <= 0x7E)
+    return s
+
+
+def pack_board_name(name: str, max_len: int = 25) -> bytes:
+    clean = sanitize_board_name(name, max_len=max_len)
+    raw = clean.encode("ascii", errors="strict")
+    out = bytearray()
+    out.append(1)  # ver
+    out.append(len(raw) & 0xFF)
+    out.extend(raw)
+    return bytes(out)
+
+
+def unpack_board_name(data: bytes, max_len: int = 25) -> str:
+    if not data or len(data) < 2:
+        return ""
+    n = int(data[1])
+    if n < 0:
+        return ""
+    n = min(n, max_len, max(0, len(data) - 2))
+    raw = data[2:2+n]
+    try:
+        txt = raw.decode("ascii", errors="ignore")
+    except Exception:
+        return ""
+    return sanitize_board_name(txt, max_len=max_len)

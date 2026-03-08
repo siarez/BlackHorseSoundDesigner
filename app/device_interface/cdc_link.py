@@ -10,6 +10,7 @@ Exposes:
 from __future__ import annotations
 
 import time
+import re
 from typing import Optional, List, Dict, Any
 
 DEFAULT_BAUD = 115200
@@ -380,3 +381,43 @@ class CdcLink:
             if ln.startswith("ERR"):
                 return None
         return None
+
+    def uid(self, timeout: float | None = None) -> str | None:
+        """Read STM32 96-bit UID via !uid. Returns 24 uppercase hex chars or None."""
+        self._write_line("!uid")
+        to = DEFAULT_TIMEOUT if timeout is None else max(0.05, float(timeout))
+        end_time = time.time() + to
+        while time.time() < end_time:
+            ln = self._read_line()
+            if not ln:
+                continue
+            if ln.startswith("OK UID"):
+                # Accept either contiguous 24 hex chars or three 32-bit words.
+                parts = ln.split()
+                if len(parts) >= 3:
+                    token = parts[2].strip()
+                    if re.fullmatch(r"[0-9A-Fa-f]{24}", token):
+                        return token.upper()
+                words = re.findall(r"(?:0x)?([0-9A-Fa-f]{8})", ln)
+                if len(words) >= 3:
+                    return ("".join(words[:3])).upper()
+                return None
+            if ln.startswith("ERR"):
+                return None
+        return None
+
+    def board_name(self, timeout: float | None = None) -> str | None:
+        """Read board name sidecar (type 0x53, id 0x95). Returns ASCII name or None."""
+        try:
+            from .record_ids import TYPE_APP_STATE, REC_STATE_BOARD_NAME
+            from .state_sidecar import unpack_board_name
+        except Exception:
+            return None
+        to = DEFAULT_TIMEOUT if timeout is None else max(0.05, float(timeout))
+        data = self.jrdb(TYPE_APP_STATE, REC_STATE_BOARD_NAME, timeout=to)
+        if data is None:
+            return None
+        try:
+            return unpack_board_name(data, max_len=25)
+        except Exception:
+            return None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 from collections import deque
 import math
+import threading
 import time
 from PySide6 import QtWidgets, QtCore
 
@@ -17,6 +18,11 @@ from .output_crossbar_tab import OutputCrossbarTab
 from .general_tab import GeneralTab
 from .level_meter import LevelMeterWidget
 from ..device_interface.device_link_manager import get_device_link_manager
+
+
+class _DeviceRefreshBridge(QtCore.QObject):
+    devices_ready = QtCore.Signal(list)
+
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, dev_mode: bool = False, show_meter: bool = False):
@@ -38,7 +44,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_load_from_device = m_file.addAction("Load From Device")
         # Hooked in Phase 2; keep disabled for now
         self.act_load_from_device.setEnabled(True)
-        self.act_load_from_device.triggered.connect(self._on_load_from_device)
+        self.act_load_from_device.triggered.connect(lambda _checked=False: self._on_load_from_device())
 
         # Central: either tabs-only, or tabs + right-side meter panel
         if self._show_meter:
@@ -51,6 +57,9 @@ class MainWindow(QtWidgets.QMainWindow):
             # Right panel with level meters
             self.level_meter = LevelMeterWidget(central)
             self.level_meter.setFixedWidth(120)
+            self.combo_meter_source = QtWidgets.QComboBox(central)
+            self.combo_meter_source.setToolTip("Select amp for level meter")
+            self.combo_meter_source.currentIndexChanged.connect(self._on_meter_source_changed)
             frame = QtWidgets.QFrame(central)
             frame.setFrameShape(QtWidgets.QFrame.VLine)
             frame.setFrameShadow(QtWidgets.QFrame.Sunken)
@@ -59,7 +68,13 @@ class MainWindow(QtWidgets.QMainWindow):
             right_w.layout().setContentsMargins(0, 0, 0, 0)
             right_w.layout().setSpacing(0)
             right_w.layout().addWidget(frame)
-            right_w.layout().addWidget(self.level_meter)
+            meter_col = QtWidgets.QWidget(central)
+            meter_col_l = QtWidgets.QVBoxLayout(meter_col)
+            meter_col_l.setContentsMargins(6, 6, 6, 6)
+            meter_col_l.setSpacing(6)
+            meter_col_l.addWidget(self.combo_meter_source, 0)
+            meter_col_l.addWidget(self.level_meter, 1)
+            right_w.layout().addWidget(meter_col)
             h.addWidget(right_w, 0)
             self.setCentralWidget(central)
         else:
@@ -116,6 +131,17 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._status_bar:
             self._status_bar.setSizeGripEnabled(False)
 
+        # Multi-device tracking (hot-plug refresh).
+        self._devices: list[dict[str, str]] = []
+        self._meter_source_uid: str = ""
+        self._dev_refresh_running = False
+        self._dev_refresh_bridge = _DeviceRefreshBridge(self)
+        self._dev_refresh_bridge.devices_ready.connect(self._apply_discovered_devices)
+        self._dev_timer = QtCore.QTimer(self)
+        self._dev_timer.setInterval(1000)
+        self._dev_timer.timeout.connect(self._on_device_refresh_timer)
+        self._dev_timer.start()
+
         # 20 Hz meter polling
         self._meter_timer = QtCore.QTimer(self)
         self._meter_timer.setInterval(50)
@@ -153,6 +179,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._meter_timer.start()
             self._meter_anim_timer.start()
 
+        self._refresh_devices_now()
+
     def _on_export(self):
         out = export_pf5_from_ui(self, self.xo_tab)
         if out:
@@ -169,10 +197,80 @@ class MainWindow(QtWidgets.QMainWindow):
                 bar.setStyleSheet("QStatusBar { color: #2e7d32; }")  # green
             bar.showMessage(message, timeout_ms)
 
+    def _on_device_refresh_timer(self):
+        self._refresh_devices_now()
+
+    def _refresh_devices_now(self):
+        if self._dev_refresh_running:
+            return
+
+        self._dev_refresh_running = True
+
+        def _worker():
+            try:
+                devices = self._link_mgr.discover_devices()
+            except Exception:
+                devices = []
+            self._dev_refresh_bridge.devices_ready.emit([dict(d) for d in (devices or [])])
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_discovered_devices(self, devices: list[dict[str, str]]):
+        self._dev_refresh_running = False
+        self._devices = [dict(d) for d in (devices or [])]
+
+        # Push to tabs with per-tab target selection.
+        if hasattr(self.general_tab, "set_devices"):
+            self.general_tab.set_devices(self._devices)
+        for tab in (self.eq_tab, self.xo_tab, self.mixer_tab, self.mix_gain_tab, self.xbar_tab):
+            if hasattr(tab, "set_target_devices"):
+                tab.set_target_devices(self._devices)
+
+        self._refresh_meter_source_combo()
+
+    def _refresh_meter_source_combo(self):
+        if not hasattr(self, "combo_meter_source"):
+            return
+        combo = self.combo_meter_source
+        prev_uid = self._meter_source_uid
+        combo.blockSignals(True)
+        combo.clear()
+        for d in self._devices:
+            if str(d.get("status", "responsive")).lower() != "responsive":
+                continue
+            label = d.get("display") or d.get("uid") or d.get("port", "")
+            combo.addItem(label, d.get("uid", ""))
+        combo.blockSignals(False)
+
+        idx = -1
+        if prev_uid:
+            for i in range(combo.count()):
+                if str(combo.itemData(i) or "").upper() == prev_uid.upper():
+                    idx = i
+                    break
+        if idx < 0 and combo.count() > 0:
+            idx = 0
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+            self._meter_source_uid = str(combo.itemData(idx) or "").strip().upper()
+        else:
+            self._meter_source_uid = ""
+        self._link_mgr.set_default_uid(self._meter_source_uid)
+
+    def _on_meter_source_changed(self, _idx: int):
+        if not hasattr(self, "combo_meter_source"):
+            return
+        self._meter_source_uid = str(self.combo_meter_source.currentData() or "").strip().upper()
+        self._link_mgr.set_default_uid(self._meter_source_uid)
+
     def _poll_levels(self):
         if not getattr(self, '_meter_enabled', False):
             return
         if not hasattr(self, 'level_meter'):
+            return
+        uid = (self._meter_source_uid or "").strip().upper()
+        if not uid:
+            self.level_meter.set_hint('No amp selected')
             return
         try:
             def _read_levels(link):
@@ -187,7 +285,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 ch2 = ((int(vF0) & 0xFF) << 8) | (int(vEF) & 0xFF)
                 return ch1, ch2
 
-            result = self._link_mgr.run_if_idle(_read_levels, auto=True, retry=False)
+            result = self._link_mgr.run_if_idle(_read_levels, uid=uid, auto=False, retry=False)
             if result is None:
                 return
             ch1, ch2 = result
@@ -202,8 +300,12 @@ class MainWindow(QtWidgets.QMainWindow):
             if p2 >= self._meter_peak_2:
                 self._meter_peak_2 = p2
                 self._meter_peak_hold_until_2 = now + self._meter_peak_hold_s
-            port = self._link_mgr.current_port() or ""
-            self.level_meter.set_hint(f"{port} ({self._meter_dbfs_offset:+.1f} dB)")
+            label = uid[-5:]
+            for d in self._devices:
+                if str(d.get("uid", "")).upper() == uid:
+                    label = d.get("display") or label
+                    break
+            self.level_meter.set_hint(f"{label} ({self._meter_dbfs_offset:+.1f} dB)")
         except Exception:
             self.level_meter.set_hint('No data')
 
@@ -269,6 +371,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "version": 1,
             "saved_at": datetime.now().isoformat(timespec='seconds'),
             "fs": int(getattr(self.eq_tab, "_fs", 48000.0)),
+            "board_name": self.general_tab.get_board_name() if hasattr(self.general_tab, 'get_board_name') else "",
             "eq": self.eq_tab.to_state_dict() if hasattr(self.eq_tab, 'to_state_dict') else [],
             "xo": {},
             "xo_misc": {},
@@ -298,6 +401,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.xo_tab.set_fs(float(fs))
             except Exception:
                 pass
+        if hasattr(self.general_tab, 'set_board_name'):
+            self.general_tab.set_board_name(str(state.get("board_name", "")))
         if hasattr(self.eq_tab, 'apply_state_dict'):
             self.eq_tab.apply_state_dict(state.get("eq") or [])
         if hasattr(self.xo_tab, 'apply_state_dict'):
@@ -347,12 +452,14 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, 'Load State', f'Failed to load: {e}')
 
     # Placeholder for Phase 2 (device sidecar read)
-    def _on_load_from_device(self):
+    def _on_load_from_device(self, uid: str | None = None):
+        if isinstance(uid, bool):
+            uid = None
         from ..device_interface.record_ids import (
-            TYPE_APP_STATE, REC_STATE_EQ, REC_STATE_XO, REC_STATE_MIXER, REC_STATE_MIXGAIN, REC_STATE_XBAR,
+            TYPE_APP_STATE, REC_STATE_EQ, REC_STATE_XO, REC_STATE_MIXER, REC_STATE_MIXGAIN, REC_STATE_XBAR, REC_STATE_BOARD_NAME,
         )
         from ..device_interface.state_sidecar import (
-            unpack_eq_state, unpack_xo_state, unpack_q97_values,
+            unpack_eq_state, unpack_xo_state, unpack_q97_values, unpack_board_name,
         )
         applied = []
         try:
@@ -363,9 +470,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     'mixer': link.jrdb(TYPE_APP_STATE, REC_STATE_MIXER),
                     'mix_gain': link.jrdb(TYPE_APP_STATE, REC_STATE_MIXGAIN),
                     'xbar': link.jrdb(TYPE_APP_STATE, REC_STATE_XBAR),
+                    'board_name': link.jrdb(TYPE_APP_STATE, REC_STATE_BOARD_NAME),
                 }
 
-            blobs = self._link_mgr.run(_read_all, auto=True)
+            target_uid = (uid or "").strip().upper()
+            blobs = self._link_mgr.run(_read_all, uid=target_uid if target_uid else None, auto=not bool(target_uid))
 
             data = blobs.get('eq')
             if data:
@@ -416,6 +525,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 if vals:
                     self.xbar_tab.apply_state_dict(vals)
                     applied.append('Digital Output Cross Bar')
+
+            data = blobs.get('board_name')
+            if data:
+                name = unpack_board_name(data, max_len=25)
+                if hasattr(self.general_tab, 'set_board_name'):
+                    self.general_tab.set_board_name(name)
+                    applied.append('Board Name')
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Load From Device', f'Failed to read device: {e}')
             return

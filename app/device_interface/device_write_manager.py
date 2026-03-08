@@ -59,7 +59,9 @@ class DeviceWriteManager:
         self,
         writes: Sequence[JournalWrite],
         *,
+        ports: Sequence[str] | None = None,
         port: str | None = None,
+        uid: str | None = None,
         auto: bool = True,
         retry: bool = True,
     ) -> JournalWriteResult:
@@ -82,7 +84,25 @@ class DeviceWriteManager:
                     out.failed.append(label)
             return out
 
-        return self._link_mgr.run(_send_all, port=port, auto=auto, retry=retry)
+        targets = [p for p in (ports or []) if isinstance(p, str) and p.strip()]
+        if targets:
+            out = JournalWriteResult()
+            for p in targets:
+                try:
+                    one = self._link_mgr.run(_send_all, port=p, auto=False, retry=retry)
+                except Exception as e:
+                    out.attempted += len(normalized)
+                    out.failed.append(f"{p}: {e}")
+                    continue
+                out.attempted += one.attempted
+                out.succeeded += one.succeeded
+                out.apply_logs.extend(f"[{p}] {ln}" for ln in one.apply_logs)
+                for label, lines in one.lines_by_label.items():
+                    out.lines_by_label[f"{p}:{label}"] = lines
+                out.failed.extend(f"{p}:{f}" for f in one.failed)
+            return out
+
+        return self._link_mgr.run(_send_all, port=port, uid=uid, auto=auto, retry=retry)
 
 
 _WRITER = DeviceWriteManager()
@@ -90,4 +110,3 @@ _WRITER = DeviceWriteManager()
 
 def get_device_write_manager() -> DeviceWriteManager:
     return _WRITER
-

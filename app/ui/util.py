@@ -3,6 +3,9 @@ from PySide6 import QtWidgets, QtGui, QtCore
 import pyqtgraph as pg
 import math
 
+# Shared width for left-side control/readout panes across tabs.
+LEFT_SIDEBAR_WIDTH = 260
+
 
 def mk_dspin(lo, hi, val, step, suffix, decimals) -> QtWidgets.QDoubleSpinBox:
     s = QtWidgets.QDoubleSpinBox()
