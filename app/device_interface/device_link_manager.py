@@ -293,25 +293,15 @@ class DeviceLinkManager:
                 continue
             prod = (p.get("product") or "").lower()
             manf = (p.get("manufacturer") or "").lower()
-            desc = (p.get("description") or "").lower()
             vid = p.get("vid")
             pid = p.get("pid")
 
             primary = ("shabrang" in prod) or ("black horse audio" in manf)
             vidpid = (vid == 0x0483 and pid == 0x5740)
-            hint = any(tag in (desc + " " + manf + " " + prod) for tag in ["cdc", "acm", "stm32", "usb serial", "ux_device_cdc_acm"])
-
-            if not (primary or vidpid or hint):
+            if not (primary or vidpid):
                 continue
-            score = (4 if primary else 0) + (2 if vidpid else 0) + (1 if hint else 0)
+            score = (4 if primary else 0) + (2 if vidpid else 0)
             out.append((score, dev))
-
-        # Fallback: if descriptors are missing/unexpected, probe all serial ports.
-        if not out:
-            for p in ports:
-                dev = (p.get("device") or "").strip()
-                if dev:
-                    out.append((0, dev))
 
         out.sort(key=lambda x: (-x[0], x[1]))
         seen: set[str] = set()
