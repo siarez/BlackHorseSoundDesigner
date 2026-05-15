@@ -14,12 +14,15 @@ from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify, LEFT_S
 from .device_target_selector import DeviceTargetSelector
 from ..device_interface.device_write_manager import (
     JournalWrite,
+    build_i2c8_payload,
     build_i2c32_payload,
     get_device_write_manager,
 )
 from ..device_interface.record_ids import (
+    TYPE_TAS_CONFIG,
     TYPE_COEFF,
     TYPE_APP_STATE,
+    REC_TAS_DAC_GAIN,
     REC_XO_A, REC_XO_B, REC_PHASE, REC_OUT_GAINS,
     REC_STATE_XO,
 )
@@ -34,6 +37,7 @@ class CrossoverTab(QtWidgets.QWidget):
         super().__init__(parent)
         self._writer = get_device_write_manager()
         self._target_devices: list[dict[str, str]] = []
+        self._output_label_width = 48
 
         self._xo_num_sections = 5
 
@@ -136,36 +140,53 @@ class CrossoverTab(QtWidgets.QWidget):
         # Channel A group
         gb_a = QtWidgets.QGroupBox("Channel A")
         la = QtWidgets.QVBoxLayout(gb_a)
-        # Channel A polarity + delay row
+        gb_out_a = QtWidgets.QGroupBox("Output")
+        out_a_v = QtWidgets.QVBoxLayout(gb_out_a)
+        out_a_v.setContentsMargins(8, 8, 8, 8)
+        out_a_v.setSpacing(6)
+
         row_a = QtWidgets.QWidget()
         row_a_h = QtWidgets.QHBoxLayout(row_a)
         row_a_h.setContentsMargins(0, 0, 0, 0)
-        row_a_h.setSpacing(8)
+        row_a_h.setSpacing(12)
         self.chk_xo_pol_A = QtWidgets.QCheckBox("Invert polarity")
         self.chk_xo_pol_A.toggled.connect(self._update_xo_plots)
         row_a_h.addWidget(self.chk_xo_pol_A)
-        # Delay control: 0..16 samples
+        self.chk_dac_gain_A = QtWidgets.QCheckBox("DAC -6 dB")
+        self.chk_dac_gain_A.setToolTip("Apply TAS3251 left-channel analog DAC attenuation (-6 dB). Useful for high-sensitivity drivers and lower hiss.")
+        self.chk_dac_gain_A.toggled.connect(self._on_gain_changed)
+        row_a_h.addWidget(self.chk_dac_gain_A)
+        row_a_h.addStretch(1)
+        out_a_v.addWidget(row_a)
+
+        row_ad = QtWidgets.QWidget()
+        row_ad_h = QtWidgets.QHBoxLayout(row_ad)
+        row_ad_h.setContentsMargins(0, 0, 0, 0)
+        row_ad_h.setSpacing(8)
         lbl_a = QtWidgets.QLabel("Delay:")
-        row_a_h.addWidget(lbl_a)
+        lbl_a.setFixedWidth(self._output_label_width)
+        row_ad_h.addWidget(lbl_a)
         self.spin_delay_A = QtWidgets.QSpinBox()
         self.spin_delay_A.setRange(0, 16)
         self.spin_delay_A.setValue(0)
         self.spin_delay_A.setSuffix(" samples")
         self.spin_delay_A.setToolTip("TAS3251 per-channel delay (0–16 samples)")
         self.spin_delay_A.valueChanged.connect(self._on_delay_changed)
-        row_a_h.addWidget(self.spin_delay_A)
+        row_ad_h.addWidget(self.spin_delay_A)
         self.lbl_delay_A = QtWidgets.QLabel("≈ 0.0 cm (0.0 in)")
+        self.lbl_delay_A.setStyleSheet("color: palette(mid);")
         self.lbl_delay_A.setToolTip("Approximate distance sound travels for this delay at 343 m/s")
-        row_a_h.addWidget(self.lbl_delay_A)
-        row_a_h.addStretch(1)
-        la.addWidget(row_a)
+        row_ad_h.addWidget(self.lbl_delay_A)
+        row_ad_h.addStretch(1)
+        out_a_v.addWidget(row_ad)
 
-        # Channel A gain (dB)
         row_ag = QtWidgets.QWidget()
         row_ag_h = QtWidgets.QHBoxLayout(row_ag)
         row_ag_h.setContentsMargins(0, 0, 0, 0)
         row_ag_h.setSpacing(8)
-        row_ag_h.addWidget(QtWidgets.QLabel("Gain:"))
+        lbl_gain_a = QtWidgets.QLabel("Gain:")
+        lbl_gain_a.setFixedWidth(self._output_label_width)
+        row_ag_h.addWidget(lbl_gain_a)
         self.spin_gain_A = QtWidgets.QDoubleSpinBox()
         self.spin_gain_A.setRange(-20.0, 20.0)
         self.spin_gain_A.setDecimals(2)
@@ -175,10 +196,12 @@ class CrossoverTab(QtWidgets.QWidget):
         self.spin_gain_A.valueChanged.connect(self._update_xo_plots)
         row_ag_h.addWidget(self.spin_gain_A)
         self.lbl_gain_A = QtWidgets.QLabel("≈ 1.00×")
+        self.lbl_gain_A.setStyleSheet("color: palette(mid);")
         row_ag_h.addWidget(self.lbl_gain_A)
         self.spin_gain_A.valueChanged.connect(self._on_gain_changed)
         row_ag_h.addStretch(1)
-        la.addWidget(row_ag)
+        out_a_v.addWidget(row_ag)
+        la.addWidget(gb_out_a)
         self.table_xo_A = QtWidgets.QTableWidget(self._xo_num_sections, 7)
         self.table_xo_A.setHorizontalHeaderLabels(
             ["#", "Mode", "Topology", "f₀ / Hz", "Q", "Ripple / dB", "Color"])
@@ -200,35 +223,53 @@ class CrossoverTab(QtWidgets.QWidget):
         # Channel B group
         gb_b = QtWidgets.QGroupBox("Channel B")
         lb = QtWidgets.QVBoxLayout(gb_b)
-        # Channel B polarity + delay row
+        gb_out_b = QtWidgets.QGroupBox("Output")
+        out_b_v = QtWidgets.QVBoxLayout(gb_out_b)
+        out_b_v.setContentsMargins(8, 8, 8, 8)
+        out_b_v.setSpacing(6)
+
         row_b = QtWidgets.QWidget()
         row_b_h = QtWidgets.QHBoxLayout(row_b)
         row_b_h.setContentsMargins(0, 0, 0, 0)
-        row_b_h.setSpacing(8)
+        row_b_h.setSpacing(12)
         self.chk_xo_pol_B = QtWidgets.QCheckBox("Invert polarity")
         self.chk_xo_pol_B.toggled.connect(self._update_xo_plots)
         row_b_h.addWidget(self.chk_xo_pol_B)
+        self.chk_dac_gain_B = QtWidgets.QCheckBox("DAC -6 dB")
+        self.chk_dac_gain_B.setToolTip("Apply TAS3251 right-channel analog DAC attenuation (-6 dB). Useful for high-sensitivity drivers and lower hiss.")
+        self.chk_dac_gain_B.toggled.connect(self._on_gain_changed)
+        row_b_h.addWidget(self.chk_dac_gain_B)
+        row_b_h.addStretch(1)
+        out_b_v.addWidget(row_b)
+
+        row_bd = QtWidgets.QWidget()
+        row_bd_h = QtWidgets.QHBoxLayout(row_bd)
+        row_bd_h.setContentsMargins(0, 0, 0, 0)
+        row_bd_h.setSpacing(8)
         lbl_b = QtWidgets.QLabel("Delay:")
-        row_b_h.addWidget(lbl_b)
+        lbl_b.setFixedWidth(self._output_label_width)
+        row_bd_h.addWidget(lbl_b)
         self.spin_delay_B = QtWidgets.QSpinBox()
         self.spin_delay_B.setRange(0, 16)
         self.spin_delay_B.setValue(0)
         self.spin_delay_B.setSuffix(" samples")
         self.spin_delay_B.setToolTip("TAS3251 per-channel delay (0–16 samples)")
         self.spin_delay_B.valueChanged.connect(self._on_delay_changed)
-        row_b_h.addWidget(self.spin_delay_B)
+        row_bd_h.addWidget(self.spin_delay_B)
         self.lbl_delay_B = QtWidgets.QLabel("≈ 0.0 cm (0.0 in)")
+        self.lbl_delay_B.setStyleSheet("color: palette(mid);")
         self.lbl_delay_B.setToolTip("Approximate distance sound travels for this delay at 343 m/s")
-        row_b_h.addWidget(self.lbl_delay_B)
-        row_b_h.addStretch(1)
-        lb.addWidget(row_b)
+        row_bd_h.addWidget(self.lbl_delay_B)
+        row_bd_h.addStretch(1)
+        out_b_v.addWidget(row_bd)
 
-        # Channel B gain (dB)
         row_bg = QtWidgets.QWidget()
         row_bg_h = QtWidgets.QHBoxLayout(row_bg)
         row_bg_h.setContentsMargins(0, 0, 0, 0)
         row_bg_h.setSpacing(8)
-        row_bg_h.addWidget(QtWidgets.QLabel("Gain:"))
+        lbl_gain_b = QtWidgets.QLabel("Gain:")
+        lbl_gain_b.setFixedWidth(self._output_label_width)
+        row_bg_h.addWidget(lbl_gain_b)
         self.spin_gain_B = QtWidgets.QDoubleSpinBox()
         self.spin_gain_B.setRange(-20.0, 20.0)
         self.spin_gain_B.setDecimals(2)
@@ -238,10 +279,12 @@ class CrossoverTab(QtWidgets.QWidget):
         self.spin_gain_B.valueChanged.connect(self._update_xo_plots)
         row_bg_h.addWidget(self.spin_gain_B)
         self.lbl_gain_B = QtWidgets.QLabel("≈ 1.00×")
+        self.lbl_gain_B.setStyleSheet("color: palette(mid);")
         row_bg_h.addWidget(self.lbl_gain_B)
         self.spin_gain_B.valueChanged.connect(self._on_gain_changed)
         row_bg_h.addStretch(1)
-        lb.addWidget(row_bg)
+        out_b_v.addWidget(row_bg)
+        lb.addWidget(gb_out_b)
         self.table_xo_B = QtWidgets.QTableWidget(self._xo_num_sections, 7)
         self.table_xo_B.setHorizontalHeaderLabels(
             ["#", "Mode", "Topology", "f₀ / Hz", "Q", "Ripple / dB", "Color"])
@@ -344,6 +387,8 @@ class CrossoverTab(QtWidgets.QWidget):
             "delayB": int(self.spin_delay_B.value()),
             "gainA_db": float(self.spin_gain_A.value()),
             "gainB_db": float(self.spin_gain_B.value()),
+            "dacA_minus6db": bool(self.chk_dac_gain_A.isChecked()),
+            "dacB_minus6db": bool(self.chk_dac_gain_B.isChecked()),
         }
         return {"A": A, "B": B, "misc": misc}
 
@@ -387,6 +432,8 @@ class CrossoverTab(QtWidgets.QWidget):
             self.spin_delay_B.setValue(int(misc.get("delayB", 0)))
             self.spin_gain_A.setValue(float(misc.get("gainA_db", 0.0)))
             self.spin_gain_B.setValue(float(misc.get("gainB_db", 0.0)))
+            self.chk_dac_gain_A.setChecked(bool(misc.get("dacA_minus6db", False)))
+            self.chk_dac_gain_B.setChecked(bool(misc.get("dacB_minus6db", False)))
         except Exception:
             pass
         self._update_xo_plots()
@@ -404,11 +451,17 @@ class CrossoverTab(QtWidgets.QWidget):
     def _update_gain_labels(self):
         def fmt(db: float) -> str:
             lin = 10.0 ** (float(db) / 20.0)
-            return f"≈ {lin:.2f}×"
+            return f"≈ {lin:.2f}× total"
         if hasattr(self, 'spin_gain_A') and hasattr(self, 'lbl_gain_A'):
-            self.lbl_gain_A.setText(fmt(self.spin_gain_A.value()))
+            total_db = float(self.spin_gain_A.value()) + self._dac_gain_offset_db(self.chk_dac_gain_A.isChecked())
+            self.lbl_gain_A.setText(fmt(total_db))
         if hasattr(self, 'spin_gain_B') and hasattr(self, 'lbl_gain_B'):
-            self.lbl_gain_B.setText(fmt(self.spin_gain_B.value()))
+            total_db = float(self.spin_gain_B.value()) + self._dac_gain_offset_db(self.chk_dac_gain_B.isChecked())
+            self.lbl_gain_B.setText(fmt(total_db))
+
+    @staticmethod
+    def _dac_gain_offset_db(enabled: bool) -> float:
+        return -6.0 if enabled else 0.0
 
     def _update_delay_labels(self):
         # Compute and show distance equivalents for current delays
@@ -638,6 +691,7 @@ class CrossoverTab(QtWidgets.QWidget):
             acc_db_A += H_sec
         # Apply channel A gain to cascade curve
         gA_db = float(getattr(self, 'spin_gain_A', None).value()) if hasattr(self, 'spin_gain_A') else 0.0
+        gA_db += self._dac_gain_offset_db(self.chk_dac_gain_A.isChecked())
         self.curve_xo_A.setData(self._freqs, acc_db_A + gA_db)
 
         # Channel B
@@ -655,6 +709,7 @@ class CrossoverTab(QtWidgets.QWidget):
                 self._xo_curves_B.append(curve)
             acc_db_B += H_sec
         gB_db = float(getattr(self, 'spin_gain_B', None).value()) if hasattr(self, 'spin_gain_B') else 0.0
+        gB_db += self._dac_gain_offset_db(self.chk_dac_gain_B.isChecked())
         self.curve_xo_B.setData(self._freqs, acc_db_B + gB_db)
 
         # Electrical sum using complex responses (accounts for phase/polarity)
@@ -737,6 +792,9 @@ class CrossoverTab(QtWidgets.QWidget):
         mapped_B, gain_mul_B = _map_sections_for_hw(sections_B)
         gA_db = float(getattr(self, 'spin_gain_A', None).value()) if hasattr(self, 'spin_gain_A') else 0.0
         gB_db = float(getattr(self, 'spin_gain_B', None).value()) if hasattr(self, 'spin_gain_B') else 0.0
+        dac_A_enabled = bool(self.chk_dac_gain_A.isChecked())
+        dac_B_enabled = bool(self.chk_dac_gain_B.isChecked())
+        dac_reg = (0x10 if dac_A_enabled else 0x00) | (0x01 if dac_B_enabled else 0x00)
         gA_lin_eff = (10.0 ** (gA_db / 20.0)) * gain_mul_A
         gB_lin_eff = (10.0 ** (gB_db / 20.0)) * gain_mul_B
 
@@ -848,6 +906,20 @@ class CrossoverTab(QtWidgets.QWidget):
                     label=sec_name,
                 )
             )
+        writes.append(
+            JournalWrite(
+                typ=TYPE_TAS_CONFIG,
+                rec_id=REC_TAS_DAC_GAIN,
+                payload=build_i2c8_payload([
+                    (0x00, 0x00),
+                    (0x7F, 0x00),
+                    (0x00, 0x01),
+                    (0x02, dac_reg),
+                    (0x00, 0x00),
+                ]),
+                label="DAC ANALOG GAIN",
+            )
+        )
 
         # Sidecar: XO A/B + misc
         try:
@@ -864,7 +936,7 @@ class CrossoverTab(QtWidgets.QWidget):
             QtWidgets.QMessageBox.critical(self, 'Crossover', f'Failed to write device: {e}')
             return
 
-        coeff_labels = {"CROSS OVER BQs", "SUB CROSS OVER BQs", "PHASE OPTIMIZER", "OUTPUT CROSS BAR"}
+        coeff_labels = {"CROSS OVER BQs", "SUB CROSS OVER BQs", "PHASE OPTIMIZER", "OUTPUT CROSS BAR", "DAC ANALOG GAIN"}
         sent_coeff = any(w.label in coeff_labels for w in writes)
         coeff_failures = [name for name in res.failed if any(lbl in name for lbl in coeff_labels)]
 

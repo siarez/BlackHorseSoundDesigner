@@ -335,6 +335,12 @@ class DeviceLinkManager:
                 return fn(link)
 
     def _ensure_link_locked(self, port: str, ent: _PortEntry) -> CdcLink:
+        if ent.link is not None:
+            try:
+                if not bool(getattr(ent.link.ser, "is_open", False)):
+                    self._close_entry_link_locked(ent)
+            except Exception:
+                self._close_entry_link_locked(ent)
         if ent.link is None:
             ent.link = CdcLink(port)
         return ent.link

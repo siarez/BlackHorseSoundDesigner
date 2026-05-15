@@ -10,7 +10,4 @@
 {"addr":"0x00","value":"0x00"}
 {"addr":"0x3D","value":"0x30", "comment":  "Left digital volume"}
 {"addr":"0x3E","value":"0x30", "comment":  "Right digital volume"}
-{"addr":"0x00","value":"0x00"}
-{"addr":"0x7F","value":"0x00"}
-{"addr":"0x00","value":"0x01", "comment": "Go to page 1"}
-{"addr":"0x02","value":"0x11", "comment": "Analog gain 0x00 for 0dB or 0x11 for -6dB"}
+{"addr":"0x3F","value":"0x2B", "comment":  "Volume ramp up/down rates"}

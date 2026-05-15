@@ -30,6 +30,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._dev_mode = bool(dev_mode)
         self._show_meter = bool(show_meter)
         self._link_mgr = get_device_link_manager()
+        self._hidden_state = {"mix_gain": {}, "xbar": {}}
         self.setWindowTitle("Black Horse Sound Designer")
         self.resize(1100, 700)
 
@@ -82,7 +83,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.setCentralWidget(tabs)
 
         # General utilities (recovery, erase, etc.)
-        self.general_tab = GeneralTab(tabs)
+        self.general_tab = GeneralTab(tabs, dev_mode=self._dev_mode)
         tabs.addTab(self.general_tab, "General")
 
         # Add tabs in process-flow order: Input Mixer first, then EQ, then Crossover
@@ -95,13 +96,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.xo_tab = CrossoverTab(tabs)
         tabs.addTab(self.xo_tab, "Crossover")
 
-        self.mix_gain_tab = MixGainAdjustTab(tabs)
-        tabs.addTab(self.mix_gain_tab, "Mix/Gain Adjust")
-
-        self.xbar_tab = OutputCrossbarTab(tabs)
-        tabs.addTab(self.xbar_tab, "Digital Output Cross Bar")
+        self.mix_gain_tab = None
+        self.xbar_tab = None
 
         if self._dev_mode:
+            self.mix_gain_tab = MixGainAdjustTab(tabs)
+            tabs.addTab(self.mix_gain_tab, "Mix/Gain Adjust")
+
+            self.xbar_tab = OutputCrossbarTab(tabs)
+            tabs.addTab(self.xbar_tab, "Digital Output Cross Bar")
+
             self.coef_tab = CoefCheckTab(tabs)
             tabs.addTab(self.coef_tab, "Coef Check")
 
@@ -385,10 +389,14 @@ class MainWindow(QtWidgets.QMainWindow):
             state["xo_misc"] = xo.get("misc", {})
         if hasattr(self.mixer_tab, 'to_state_dict'):
             state["input_mixer"] = self.mixer_tab.to_state_dict()
-        if hasattr(self.mix_gain_tab, 'to_state_dict'):
+        if self.mix_gain_tab is not None and hasattr(self.mix_gain_tab, 'to_state_dict'):
             state["mix_gain"] = self.mix_gain_tab.to_state_dict()
-        if hasattr(self.xbar_tab, 'to_state_dict'):
+        else:
+            state["mix_gain"] = dict(self._hidden_state.get("mix_gain") or {})
+        if self.xbar_tab is not None and hasattr(self.xbar_tab, 'to_state_dict'):
             state["xbar"] = self.xbar_tab.to_state_dict()
+        else:
+            state["xbar"] = dict(self._hidden_state.get("xbar") or {})
         return state
 
     def _apply_state(self, state: dict):
@@ -413,10 +421,16 @@ class MainWindow(QtWidgets.QMainWindow):
             })
         if hasattr(self.mixer_tab, 'apply_state_dict'):
             self.mixer_tab.apply_state_dict(state.get("input_mixer") or {})
-        if hasattr(self.mix_gain_tab, 'apply_state_dict'):
-            self.mix_gain_tab.apply_state_dict(state.get("mix_gain") or {})
-        if hasattr(self.xbar_tab, 'apply_state_dict'):
-            self.xbar_tab.apply_state_dict(state.get("xbar") or {})
+        mix_gain_state = state.get("mix_gain") or {}
+        xbar_state = state.get("xbar") or {}
+        if self.mix_gain_tab is not None and hasattr(self.mix_gain_tab, 'apply_state_dict'):
+            self.mix_gain_tab.apply_state_dict(mix_gain_state)
+        else:
+            self._hidden_state["mix_gain"] = dict(mix_gain_state)
+        if self.xbar_tab is not None and hasattr(self.xbar_tab, 'apply_state_dict'):
+            self.xbar_tab.apply_state_dict(xbar_state)
+        else:
+            self._hidden_state["xbar"] = dict(xbar_state)
 
     def _on_save_state(self):
         import json
@@ -511,19 +525,31 @@ class MainWindow(QtWidgets.QMainWindow):
                     applied.append('Input Mixer')
 
             data = blobs.get('mix_gain')
-            if data:
+            if data and self.mix_gain_tab is not None:
                 order = list(self.mix_gain_tab.NAMES.keys()) if hasattr(self.mix_gain_tab, 'NAMES') else []
                 vals = unpack_q97_values(data, order)
                 if vals:
                     self.mix_gain_tab.apply_state_dict(vals)
                     applied.append('Mix/Gain Adjust')
+            elif data:
+                order = list(MixGainAdjustTab.NAMES.keys()) if hasattr(MixGainAdjustTab, 'NAMES') else []
+                vals = unpack_q97_values(data, order)
+                if vals:
+                    self._hidden_state["mix_gain"] = dict(vals)
+                    applied.append('Mix/Gain Adjust')
 
             data = blobs.get('xbar')
-            if data:
+            if data and self.xbar_tab is not None:
                 order = list(self.xbar_tab.NAMES) if hasattr(self.xbar_tab, 'NAMES') else []
                 vals = unpack_q97_values(data, order)
                 if vals:
                     self.xbar_tab.apply_state_dict(vals)
+                    applied.append('Digital Output Cross Bar')
+            elif data:
+                order = list(OutputCrossbarTab.NAMES) if hasattr(OutputCrossbarTab, 'NAMES') else []
+                vals = unpack_q97_values(data, order)
+                if vals:
+                    self._hidden_state["xbar"] = dict(vals)
                     applied.append('Digital Output Cross Bar')
 
             data = blobs.get('board_name')

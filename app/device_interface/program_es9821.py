@@ -19,6 +19,9 @@ Usage
       --jsonl app/eqcore/maps/es9821_registers.jsonl \
       --port /dev/tty.usbmodemXXXX
 
+example
+    uv run -m app.device_interface.program_es9821 --jsonl app/eqcore/maps/shabrang_es9821_minimal.jsonl --addr 0x20
+
 Options
 - --type/--id to override journal type/id (defaults 0x21/0x00)
 - --addr to override ES9821 7-bit I2C address (default 0x40)

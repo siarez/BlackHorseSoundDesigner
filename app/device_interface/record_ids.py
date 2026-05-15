@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-Central registry for journal record IDs used with type 0x52 (coeff bytes).
+Central registry for journal record IDs used by app-written TAS journal records.
 
 Keep this file authoritative to avoid collisions between features. Firmware
 replays the latest (type,id) pairs on boot; reusing an ID for a different
@@ -13,11 +13,17 @@ Usage:
   link.jwrb_with_log(TYPE_COEFF, REC_EQ_L, payload)
 """
 
+# Journal type for generic TAS register writes (program/tuning/small controls):
+TYPE_TAS_CONFIG: int = 0x51
+
 # Journal type for 32-bit coefficient streams (book 0x8C):
 TYPE_COEFF: int = 0x52
 TYPE_APP_STATE: int = 0x53
 
 # Reserved IDs (unique per feature/section)
+
+# TAS generic register writes
+REC_TAS_DAC_GAIN: int = 0x03  # Page 1, reg 0x02 analog -6 dB attenuators
 
 # Crossover
 REC_XO_A: int = 0x05           # CROSS OVER BQs (Channel A)

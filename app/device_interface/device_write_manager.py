@@ -49,6 +49,20 @@ def build_i2c32_payload(items: Iterable[tuple[int, int, int]], i2c7: int = 0x4A)
     return bytes(payload)
 
 
+def build_i2c8_payload(items: Iterable[tuple[int, int]], i2c7: int = 0x4A) -> bytes:
+    """Build a compact 8-bit register stream for !jwrb payloads.
+
+    Item format: (reg, value)
+    Encoded format: [i2c7] + repeated [reg, val].
+    """
+    payload = bytearray()
+    payload.append(i2c7 & 0xFF)
+    for reg_i, val_i in items:
+        payload.append(reg_i & 0xFF)
+        payload.append(val_i & 0xFF)
+    return bytes(payload)
+
+
 class DeviceWriteManager:
     """Centralized journal writer for coefficient + sidecar updates."""
 

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from PySide6 import QtWidgets, QtCore, QtGui
+from pathlib import Path
 
 from ..device_interface.device_link_manager import get_device_link_manager
 from ..device_interface.device_write_manager import get_device_write_manager, JournalWrite
-from ..device_interface.record_ids import TYPE_APP_STATE, REC_STATE_BOARD_NAME
+from ..device_interface.record_ids import TYPE_APP_STATE, TYPE_TAS_CONFIG, REC_STATE_BOARD_NAME
+from ..device_interface.program_tas3251 import load_simple_regs, build_payload_tas3251
+from ..device_interface.program_es9821 import load_es9821_pairs, build_payload_es9821
 from ..device_interface.state_sidecar import pack_board_name, sanitize_board_name
 from .util import notify
 
@@ -12,11 +15,13 @@ from .util import notify
 class GeneralTab(QtWidgets.QWidget):
     """General device utilities and multi-device management UI."""
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None):
+    def __init__(self, parent: QtWidgets.QWidget | None = None, dev_mode: bool = False):
         super().__init__(parent)
         self._link_mgr = get_device_link_manager()
         self._writer = get_device_write_manager()
         self._devices: list[dict[str, str]] = []
+        self._dev_mode = bool(dev_mode)
+        self._maps_dir = Path(__file__).resolve().parents[2] / "app" / "eqcore" / "maps"
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -38,14 +43,14 @@ class GeneralTab(QtWidgets.QWidget):
         self.combo_load_source.currentIndexChanged.connect(self._sync_from_selected)
         load_ctrl_l.addWidget(self.combo_load_source, 1)
         self.btn_load_from_device = QtWidgets.QPushButton("Load From Device")
-        self.btn_load_from_device.setToolTip("Read compact sidecar (0x53) from selected device and apply to UI")
+        self.btn_load_from_device.setToolTip("Read settings from selected device and update the UI")  # Read compact sidecar (0x53) from selected device and apply to UI
         self.btn_load_from_device.clicked.connect(self._on_load_from_device)
         load_ctrl_l.addWidget(self.btn_load_from_device, 0)
         grid.addWidget(load_ctrl, 0, 0, 1, 1)
 
         load_desc = QtWidgets.QLabel(
-            "Loads saved UI settings from the selected amp's sidecar records (type 0x53) "
-            "and populates the tabs. Does not program DSP until you press Send."
+            "Loads settings from the selected amp "
+            "and populates the tabs. Does not program DSP."
         )
         load_desc.setWordWrap(True)
         grid.addWidget(load_desc, 0, 1, 1, 1)
@@ -69,7 +74,7 @@ class GeneralTab(QtWidgets.QWidget):
         grid.addWidget(uid_ctrl, 1, 0, 1, 1)
 
         uid_desc = QtWidgets.QLabel(
-            "Reads the STM32 96-bit hardware unique ID for the selected amp."
+            "Reads 96-bit hardware unique ID for the selected amp."  # the STM32 96-bit hardware unique ID
         )
         uid_desc.setWordWrap(True)
         grid.addWidget(uid_desc, 1, 1, 1, 1)
@@ -98,17 +103,57 @@ class GeneralTab(QtWidgets.QWidget):
         name_desc.setWordWrap(True)
         grid.addWidget(name_desc, 2, 1, 1, 1)
 
-        # Row 3: Erase EEPROM (Journal)
-        self.btn_erase = QtWidgets.QPushButton("Erase EEPROM (Journal)")
-        self.btn_erase.setToolTip("Fills the selected amp's 24C256 with 0xFF via !fill")
-        self.btn_erase.clicked.connect(self._on_erase)
-        grid.addWidget(self.btn_erase, 3, 0, 1, 1)
+        self.btn_erase = None
+        self.btn_factory_reset = QtWidgets.QPushButton("Factory Reset")
+        self.btn_factory_reset.setToolTip("Erase the selected amp's journal and reprogram the default TAS3251 and ES9821 maps.")
+        self.btn_factory_reset.clicked.connect(self._on_factory_reset)
+        grid.addWidget(self.btn_factory_reset, 3, 0, 1, 1)
 
-        erase_desc = QtWidgets.QLabel(
-            "Dangerous: erases the selected amp's entire on-board journal (all saved profiles/records)."
+        factory_desc = QtWidgets.QLabel(
+            "Recovery utility: erases the selected amp's EEPROM journal, then writes the default "
+            "TAS3251 and ES9821 baseline maps."
         )
-        erase_desc.setWordWrap(True)
-        grid.addWidget(erase_desc, 3, 1, 1, 1)
+        factory_desc.setWordWrap(True)
+        grid.addWidget(factory_desc, 3, 1, 1, 1)
+
+        self.btn_program_tas = None
+        self.btn_program_es = None
+        if self._dev_mode:
+            # Row 4: Erase EEPROM (Journal)
+            self.btn_erase = QtWidgets.QPushButton("Erase EEPROM (Journal)")
+            self.btn_erase.setToolTip("Fills the selected amp's 24C256 with 0xFF via !fill")
+            self.btn_erase.clicked.connect(self._on_erase)
+            grid.addWidget(self.btn_erase, 4, 0, 1, 1)
+
+            erase_desc = QtWidgets.QLabel(
+                "Dangerous: erases the selected amp's entire on-board journal (all saved profiles/records)."
+            )
+            erase_desc.setWordWrap(True)
+            grid.addWidget(erase_desc, 4, 1, 1, 1)
+
+            self.btn_program_tas = QtWidgets.QPushButton("Program TAS3251 Maps")
+            self.btn_program_tas.setToolTip("Write TAS3251 program memory and register tuning maps to the selected amp.")
+            self.btn_program_tas.clicked.connect(self._on_program_tas)
+            grid.addWidget(self.btn_program_tas, 5, 0, 1, 1)
+
+            tas_desc = QtWidgets.QLabel(
+                "Developer utility: writes shabrang_tas_program_memory.jsonl and "
+                "shabrang_tas_register_tuning.jsonl to the selected amp."
+            )
+            tas_desc.setWordWrap(True)
+            grid.addWidget(tas_desc, 5, 1, 1, 1)
+
+            self.btn_program_es = QtWidgets.QPushButton("Program ES9821 Minimal Map")
+            self.btn_program_es.setToolTip("Write shabrang_es9821_minimal.jsonl to the selected amp at I2C address 0x20.")
+            self.btn_program_es.clicked.connect(self._on_program_es9821_minimal)
+            grid.addWidget(self.btn_program_es, 6, 0, 1, 1)
+
+            es_desc = QtWidgets.QLabel(
+                "Developer utility: writes shabrang_es9821_minimal.jsonl to the selected amp "
+                "using ES9821 journal record 0x21/0x00 and I2C address 0x20."
+            )
+            es_desc.setWordWrap(True)
+            grid.addWidget(es_desc, 6, 1, 1, 1)
 
         root.addLayout(grid)
 
@@ -190,7 +235,13 @@ class GeneralTab(QtWidgets.QWidget):
         self.btn_load_from_device.setEnabled(has_dev)
         self.btn_read_uid.setEnabled(has_dev)
         self.btn_save_board_name.setEnabled(has_dev)
-        self.btn_erase.setEnabled(has_dev)
+        self.btn_factory_reset.setEnabled(has_dev)
+        if self.btn_erase is not None:
+            self.btn_erase.setEnabled(has_dev)
+        if self.btn_program_tas is not None:
+            self.btn_program_tas.setEnabled(has_dev)
+        if self.btn_program_es is not None:
+            self.btn_program_es.setEnabled(has_dev)
         self.btn_copy_uid.setEnabled(bool(self.edit_uid.text().strip()))
 
         if not d:
@@ -221,13 +272,13 @@ class GeneralTab(QtWidgets.QWidget):
             self.tbl_devices.setItem(r, 3, QtWidgets.QTableWidgetItem(status_txt))
 
     def _on_erase(self):
-        if not self._confirm():
+        if not self._confirm_erase():
             return
         uid = self.selected_uid()
         if not uid:
             QtWidgets.QMessageBox.warning(self, "Erase EEPROM", "No target amp selected")
             return
-
+        paused = self._pause_background_activity()
         self.btn_erase.setEnabled(False)
         old_cursor = self.cursor()
         try:
@@ -238,17 +289,10 @@ class GeneralTab(QtWidgets.QWidget):
         QtWidgets.QApplication.processEvents()
 
         try:
-            def _erase(link) -> bool:
-                try:
-                    link._write_line("!ei")
-                except Exception:
-                    pass
-                link._write_line("!fill 0 32768 255")
-                return self._wait_for_fill_result(link, timeout_s=30.0)
-
-            ok = self._link_mgr.run(_erase, uid=uid, auto=False)
+            ok = self._erase_uid(uid)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Erase EEPROM", f"Failed: {e}")
+            self._resume_background_activity(paused)
             self._restore_after(old_cursor)
             return
 
@@ -258,9 +302,10 @@ class GeneralTab(QtWidgets.QWidget):
         else:
             self.lbl_status.setText("EEPROM erase failed or timed out.")
             QtWidgets.QMessageBox.warning(self, "Erase EEPROM", "Failed: no OK FILL received")
+        self._resume_background_activity(paused)
         self._restore_after(old_cursor)
 
-    def _confirm(self) -> bool:
+    def _confirm_erase(self) -> bool:
         m = QtWidgets.QMessageBox(self)
         m.setIcon(QtWidgets.QMessageBox.Warning)
         m.setWindowTitle("Erase EEPROM")
@@ -270,13 +315,45 @@ class GeneralTab(QtWidgets.QWidget):
         m.setDefaultButton(QtWidgets.QMessageBox.Cancel)
         return m.exec() == QtWidgets.QMessageBox.Ok
 
+    def _confirm_factory_reset(self) -> bool:
+        m = QtWidgets.QMessageBox(self)
+        m.setIcon(QtWidgets.QMessageBox.Warning)
+        m.setWindowTitle("Factory Reset")
+        m.setText("Factory reset the selected amp?")
+        m.setInformativeText(
+            "This erases the amp's EEPROM journal, then rewrites the default TAS3251 and ES9821 maps."
+        )
+        m.setStandardButtons(QtWidgets.QMessageBox.Cancel | QtWidgets.QMessageBox.Ok)
+        m.setDefaultButton(QtWidgets.QMessageBox.Cancel)
+        return m.exec() == QtWidgets.QMessageBox.Ok
+
+    def _erase_uid(self, uid: str) -> bool:
+        def _erase(link) -> bool:
+            try:
+                link._write_line("!ei")
+            except Exception as e:
+                raise RuntimeError(f"during !ei: {e}") from e
+            try:
+                link._write_line("!fill 0 32768 255")
+            except Exception as e:
+                raise RuntimeError(f"during !fill command write: {e}") from e
+            try:
+                return self._wait_for_fill_result(link, timeout_s=30.0)
+            except Exception as e:
+                raise RuntimeError(f"during !fill completion wait: {e}") from e
+
+        return bool(self._link_mgr.run(_erase, uid=uid, auto=False, retry=False))
+
     def _wait_for_fill_result(self, link, timeout_s: float = 30.0) -> bool:
         import time
 
         dl = 0.2
         t0 = time.time()
         while (time.time() - t0) < timeout_s:
-            lines = link.read_lines(dl)
+            try:
+                lines = link.read_lines(dl)
+            except Exception as e:
+                raise RuntimeError(f"while reading fill status: {e}") from e
             for ln in lines:
                 s = (ln or "").strip().upper()
                 if s.startswith("OK FILL"):
@@ -291,7 +368,42 @@ class GeneralTab(QtWidgets.QWidget):
             self.setCursor(old_cursor)
         except Exception:
             pass
-        self.btn_erase.setEnabled(True)
+        if self.btn_erase is not None:
+            self.btn_erase.setEnabled(True)
+
+    def _pause_background_activity(self) -> dict[str, bool]:
+        state: dict[str, bool] = {}
+        mw = self.window()
+        if mw is None:
+            return state
+        for name in ("_dev_timer", "_meter_timer", "_meter_anim_timer"):
+            timer = getattr(mw, name, None)
+            if timer is None:
+                continue
+            try:
+                state[name] = bool(timer.isActive())
+                if state[name]:
+                    timer.stop()
+            except Exception:
+                pass
+        return state
+
+    def _resume_background_activity(self, state: dict[str, bool]):
+        if not state:
+            return
+        mw = self.window()
+        if mw is None:
+            return
+        for name, was_active in state.items():
+            if not was_active:
+                continue
+            timer = getattr(mw, name, None)
+            if timer is None:
+                continue
+            try:
+                timer.start()
+            except Exception:
+                pass
 
     def _on_load_from_device(self):
         uid = self.selected_uid()
@@ -356,6 +468,157 @@ class GeneralTab(QtWidgets.QWidget):
         except Exception:
             pass
         self.btn_read_uid.setEnabled(True)
+
+    def _run_dev_writes(self, title: str, busy_text: str, writes: list[JournalWrite], button: QtWidgets.QPushButton | None):
+        uid = self.selected_uid()
+        if not uid:
+            QtWidgets.QMessageBox.warning(self, title, "No target amp selected")
+            return
+        if not writes:
+            QtWidgets.QMessageBox.warning(self, title, "Nothing to send")
+            return
+
+        if button is not None:
+            button.setEnabled(False)
+        old_cursor = self.cursor()
+        try:
+            self.setCursor(QtCore.Qt.BusyCursor)
+        except Exception:
+            pass
+        self.lbl_status.setText(busy_text)
+        QtWidgets.QApplication.processEvents()
+
+        try:
+            res = self._writer.apply(writes, uid=uid, auto=False, retry=True)
+        except Exception as e:
+            self.lbl_status.setText(f"{title} failed: {e}")
+            notify(self, f"{title} failed: {e}")
+            self._restore_dev_action(old_cursor, button)
+            return
+
+        if res.ok:
+            self.lbl_status.setText(f"{title} completed.")
+            notify(self, f"{title} completed.")
+        else:
+            self.lbl_status.setText(f"{title} failed.")
+            details = "\n".join(res.failed)
+            QtWidgets.QMessageBox.warning(self, title, f"Completed with write errors:\n{details}")
+            notify(self, f"{title} failed.")
+        self._restore_dev_action(old_cursor, button)
+
+    def _restore_dev_action(self, old_cursor, button: QtWidgets.QPushButton | None):
+        try:
+            self.setCursor(old_cursor)
+        except Exception:
+            pass
+        if button is not None:
+            button.setEnabled(True)
+
+    def _build_tas_writes(self) -> list[JournalWrite]:
+        program_path = self._maps_dir / "shabrang_tas_program_memory.jsonl"
+        tuning_path = self._maps_dir / "shabrang_tas_register_tuning.jsonl"
+        if not program_path.exists() or not tuning_path.exists():
+            raise FileNotFoundError("Required TAS3251 map files were not found.")
+        program_payload = build_payload_tas3251(load_simple_regs(program_path), 0x4A)
+        tuning_payload = build_payload_tas3251(load_simple_regs(tuning_path), 0x4A)
+        return [
+            JournalWrite(TYPE_TAS_CONFIG, 0x01, program_payload, "TAS PROGRAM"),
+            JournalWrite(TYPE_TAS_CONFIG, 0x02, tuning_payload, "TAS TUNING"),
+        ]
+
+    def _build_es9821_minimal_writes(self) -> list[JournalWrite]:
+        map_path = self._maps_dir / "shabrang_es9821_minimal.jsonl"
+        if not map_path.exists():
+            raise FileNotFoundError("Required ES9821 map file was not found.")
+        payload = build_payload_es9821(load_es9821_pairs(map_path), i2c_addr_7bit=0x20)
+        return [JournalWrite(0x21, 0x00, payload, "ES9821 MINIMAL")]
+
+    def _on_program_tas(self):
+        try:
+            writes = self._build_tas_writes()
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Program TAS3251", f"Failed to build TAS3251 payloads: {e}")
+            return
+        self._run_dev_writes(
+            "Program TAS3251",
+            "Programming TAS3251 maps...",
+            writes,
+            self.btn_program_tas,
+        )
+
+    def _on_program_es9821_minimal(self):
+        try:
+            writes = self._build_es9821_minimal_writes()
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, "Program ES9821", f"Failed to build ES9821 payload: {e}")
+            return
+        self._run_dev_writes(
+            "Program ES9821",
+            "Programming ES9821 minimal map...",
+            writes,
+            self.btn_program_es,
+        )
+
+    def _on_factory_reset(self):
+        uid = self.selected_uid()
+        if not uid:
+            QtWidgets.QMessageBox.warning(self, "Factory Reset", "No target amp selected")
+            return
+        if not self._confirm_factory_reset():
+            return
+
+        paused = self._pause_background_activity()
+        self.btn_factory_reset.setEnabled(False)
+        old_cursor = self.cursor()
+        try:
+            self.setCursor(QtCore.Qt.BusyCursor)
+        except Exception:
+            pass
+        self.lbl_status.setText("Factory reset: erasing EEPROM...")
+        QtWidgets.QApplication.processEvents()
+
+        try:
+            ok = self._erase_uid(uid)
+        except Exception as e:
+            self.lbl_status.setText(f"Factory reset failed: {e}")
+            notify(self, f"Factory reset failed: {e}")
+            self._resume_background_activity(paused)
+            self._restore_dev_action(old_cursor, self.btn_factory_reset)
+            return
+        if not ok:
+            self.lbl_status.setText("Factory reset failed during EEPROM erase.")
+            QtWidgets.QMessageBox.warning(self, "Factory Reset", "Failed: no OK FILL received")
+            notify(self, "Factory reset failed during EEPROM erase.")
+            self._resume_background_activity(paused)
+            self._restore_dev_action(old_cursor, self.btn_factory_reset)
+            return
+
+        self.lbl_status.setText("Factory reset: programming default maps...")
+        QtWidgets.QApplication.processEvents()
+        try:
+            writes = self._build_tas_writes() + self._build_es9821_minimal_writes()
+            res = self._writer.apply(writes, uid=uid, auto=False, retry=True)
+        except Exception as e:
+            self.lbl_status.setText(f"Factory reset failed: {e}")
+            QtWidgets.QMessageBox.warning(self, "Factory Reset", f"Programming failed after erase:\n{e}")
+            notify(self, f"Factory reset failed: {e}")
+            self._resume_background_activity(paused)
+            self._restore_dev_action(old_cursor, self.btn_factory_reset)
+            return
+
+        if res.ok:
+            self.lbl_status.setText("Factory reset completed.")
+            notify(self, "Factory reset completed.")
+        else:
+            self.lbl_status.setText("Factory reset completed with write errors.")
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Factory Reset",
+                "Completed with write errors:\n" + "\n".join(res.failed),
+            )
+            notify(self, "Factory reset completed with write errors.")
+        self._resume_background_activity(paused)
+        self._restore_dev_action(old_cursor, self.btn_factory_reset)
 
     def _on_save_board_name(self):
         uid = self.selected_uid()

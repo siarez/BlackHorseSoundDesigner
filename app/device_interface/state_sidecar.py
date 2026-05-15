@@ -18,7 +18,7 @@ XO (REC_STATE_XO = 0x91):
         peaking/low shelf/high shelf -> signed gain (i8, 0.25 dB step)
         others -> ripple (0..3 dB)
   Misc: [flags u8][delayA u8][delayB u8][gainA_qdb_i8][gainB_qdb_i8]
-    flags: bit0 invertA, bit1 invertB
+    flags: bit0 invertA, bit1 invertB, bit2 dacA_minus6db, bit3 dacB_minus6db
 
 MIXER (REC_STATE_MIXER = 0x92):
   [ver u8=1][n u8=4] then 4x i16 (Q9.7) in order:
@@ -228,7 +228,12 @@ def pack_xo_state(xo: Dict, fs_hz: int = 48000) -> bytes:
     for ent in B:
         out.extend(_row(ent))
     misc = xo.get("misc", {}) or {}
-    flags = (1 if misc.get("invertA") else 0) | ((1 if misc.get("invertB") else 0) << 1)
+    flags = (
+        (1 if misc.get("invertA") else 0)
+        | ((1 if misc.get("invertB") else 0) << 1)
+        | ((1 if misc.get("dacA_minus6db") else 0) << 2)
+        | ((1 if misc.get("dacB_minus6db") else 0) << 3)
+    )
     out.append(flags & 0xFF)
     out.append(int(misc.get("delayA", 0)) & 0xFF)
     out.append(int(misc.get("delayB", 0)) & 0xFF)
@@ -272,6 +277,8 @@ def unpack_xo_state(data: bytes) -> Dict:
         flags = data[idx]; idx += 1
         misc["invertA"] = bool(flags & 0x01)
         misc["invertB"] = bool(flags & 0x02)
+        misc["dacA_minus6db"] = bool(flags & 0x04)
+        misc["dacB_minus6db"] = bool(flags & 0x08)
         misc["delayA"] = int(data[idx]); misc["delayB"] = int(data[idx+1]); idx += 2
         misc["gainA_db"] = _i8_q25_to_db(data[idx]); misc["gainB_db"] = _i8_q25_to_db(data[idx+1]); idx += 2
     return {"fs": fs, "A": A, "B": B, "misc": misc}
