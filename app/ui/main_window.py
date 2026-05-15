@@ -559,9 +559,9 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.general_tab.set_board_name(name)
                     applied.append('Board Name')
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'Load From Device', f'Failed to read device: {e}')
+            QtWidgets.QMessageBox.critical(self, 'Load From Device', f'Failed to load settings from device: {e}')
             return
         if applied:
             QtWidgets.QMessageBox.information(self, 'Load From Device', 'Loaded: ' + ', '.join(applied))
         else:
-            QtWidgets.QMessageBox.information(self, 'Load From Device', 'No sidecar (0x53) records found')
+            QtWidgets.QMessageBox.information(self, 'Load From Device', 'Nothing to load')  # No sidecar (0x53) records found

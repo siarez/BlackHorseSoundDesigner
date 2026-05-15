@@ -43,7 +43,7 @@ class GeneralTab(QtWidgets.QWidget):
         self.combo_load_source.currentIndexChanged.connect(self._sync_from_selected)
         load_ctrl_l.addWidget(self.combo_load_source, 1)
         self.btn_load_from_device = QtWidgets.QPushButton("Load From Device")
-        self.btn_load_from_device.setToolTip("Read settings from selected device and update the UI")  # Read compact sidecar (0x53) from selected device and apply to UI
+        self.btn_load_from_device.setToolTip("Read settings from selected device and update the UI")
         self.btn_load_from_device.clicked.connect(self._on_load_from_device)
         load_ctrl_l.addWidget(self.btn_load_from_device, 0)
         grid.addWidget(load_ctrl, 0, 0, 1, 1)
@@ -91,13 +91,13 @@ class GeneralTab(QtWidgets.QWidget):
         self.edit_board_name.setValidator(QtGui.QRegularExpressionValidator(rx, self))
         name_ctrl_l.addWidget(self.edit_board_name, 1)
         self.btn_save_board_name = QtWidgets.QPushButton("Save Name To Device")
-        self.btn_save_board_name.setToolTip("Write board name sidecar record (type 0x53) to selected amp")
+        self.btn_save_board_name.setToolTip("Save the board name to the selected amp")
         self.btn_save_board_name.clicked.connect(self._on_save_board_name)
         name_ctrl_l.addWidget(self.btn_save_board_name, 0)
         grid.addWidget(name_ctrl, 2, 0, 1, 1)
 
         name_desc = QtWidgets.QLabel(
-            "Stores a user-defined board name in the selected amp's device journal. "
+            "Stores a user-defined board name on the selected amp. "
             "Name must be printable ASCII and up to 25 characters."
         )
         name_desc.setWordWrap(True)
@@ -105,13 +105,13 @@ class GeneralTab(QtWidgets.QWidget):
 
         self.btn_erase = None
         self.btn_factory_reset = QtWidgets.QPushButton("Factory Reset")
-        self.btn_factory_reset.setToolTip("Erase the selected amp's journal and reprogram the default TAS3251 and ES9821 maps.")
+        self.btn_factory_reset.setToolTip("Erase saved settings on the selected amp and restore the default TAS3251 and ES9821 settings.")
         self.btn_factory_reset.clicked.connect(self._on_factory_reset)
         grid.addWidget(self.btn_factory_reset, 3, 0, 1, 1)
 
         factory_desc = QtWidgets.QLabel(
-            "Recovery utility: erases the selected amp's EEPROM journal, then writes the default "
-            "TAS3251 and ES9821 baseline maps."
+            "Recovery utility: erases the selected amp's saved settings, then writes the default "
+            "TAS3251 and ES9821 baseline settings."
         )
         factory_desc.setWordWrap(True)
         grid.addWidget(factory_desc, 3, 1, 1, 1)
@@ -321,7 +321,7 @@ class GeneralTab(QtWidgets.QWidget):
         m.setWindowTitle("Factory Reset")
         m.setText("Factory reset the selected amp?")
         m.setInformativeText(
-            "This erases the amp's EEPROM journal, then rewrites the default TAS3251 and ES9821 maps."
+            "This erases the amp's saved settings, then rewrites the default TAS3251 and ES9821 settings."
         )
         m.setStandardButtons(QtWidgets.QMessageBox.Cancel | QtWidgets.QMessageBox.Ok)
         m.setDefaultButton(QtWidgets.QMessageBox.Cancel)
@@ -332,15 +332,15 @@ class GeneralTab(QtWidgets.QWidget):
             try:
                 link._write_line("!ei")
             except Exception as e:
-                raise RuntimeError(f"during !ei: {e}") from e
+                raise RuntimeError(f"while starting the erase process: {e}") from e
             try:
                 link._write_line("!fill 0 32768 255")
             except Exception as e:
-                raise RuntimeError(f"during !fill command write: {e}") from e
+                raise RuntimeError(f"while sending the erase command: {e}") from e
             try:
                 return self._wait_for_fill_result(link, timeout_s=30.0)
             except Exception as e:
-                raise RuntimeError(f"during !fill completion wait: {e}") from e
+                raise RuntimeError(f"while waiting for the erase to finish: {e}") from e
 
         return bool(self._link_mgr.run(_erase, uid=uid, auto=False, retry=False))
 
@@ -353,7 +353,7 @@ class GeneralTab(QtWidgets.QWidget):
             try:
                 lines = link.read_lines(dl)
             except Exception as e:
-                raise RuntimeError(f"while reading fill status: {e}") from e
+                raise RuntimeError(f"while checking erase progress: {e}") from e
             for ln in lines:
                 s = (ln or "").strip().upper()
                 if s.startswith("OK FILL"):
@@ -587,7 +587,7 @@ class GeneralTab(QtWidgets.QWidget):
             return
         if not ok:
             self.lbl_status.setText("Factory reset failed during EEPROM erase.")
-            QtWidgets.QMessageBox.warning(self, "Factory Reset", "Failed: no OK FILL received")
+            QtWidgets.QMessageBox.warning(self, "Factory Reset", "Failed: the device did not confirm completion.")
             notify(self, "Factory reset failed during EEPROM erase.")
             self._resume_background_activity(paused)
             self._restore_dev_action(old_cursor, self.btn_factory_reset)

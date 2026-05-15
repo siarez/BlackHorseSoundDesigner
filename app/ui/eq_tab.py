@@ -47,7 +47,7 @@ class EqTab(QtWidgets.QWidget):
         # Place the Send button at the bottom (consistent with Crossover tab)
         vleft.addStretch(1)
         self.btn_send_eq = QtWidgets.QPushButton("Send EQ to Device")
-        self.btn_send_eq.setToolTip("Send current EQ coefficients + Stage Gain to TAS3251 and save in journal")
+        self.btn_send_eq.setToolTip("Send current EQ settings and stage gain to TAS3251 and save them on the device")
         self.btn_send_eq.clicked.connect(self._on_send_eq)
         self.target_selector = DeviceTargetSelector(self)
         self.target_selector.selectionChanged.connect(self._update_send_enabled)
@@ -225,10 +225,10 @@ class EqTab(QtWidgets.QWidget):
 
     def _init_fixed_rows(self):
         defaults = [
-            (FilterType.PEAK, 1000.0, 0.70, 4.5, True)
+            (FilterType.ALLPASS, 1000.0, 0.70, 0.0, True)
         ]
         while len(defaults) < self._num_sections:
-            defaults.append((FilterType.PEAK, 1000.0, 0.70, 0.0, True))
+            defaults.append((FilterType.ALLPASS, 1000.0, 0.70, 0.0, True))
         for row, (typ, f0, q, gain, active) in enumerate(defaults):
             self._setup_row(row, typ, f0, q, gain, active)
 
@@ -435,7 +435,7 @@ class EqTab(QtWidgets.QWidget):
         try:
             lines = ref_path.read_text(encoding='utf-8').splitlines()
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'EQ', f'Failed to read reference map: {e}')
+            QtWidgets.QMessageBox.critical(self, 'EQ', f'Failed to load default TAS3251 settings: {e}')
             return
 
         # Helper: quantize to 32-bit words according to TAS formats
@@ -523,7 +523,7 @@ class EqTab(QtWidgets.QWidget):
             side = pack_eq_state(self.to_state_dict(), int(self._fs))
             writes.append(JournalWrite(TYPE_APP_STATE, REC_STATE_EQ, side, "STATE EQ"))
         except Exception as e:
-            QtWidgets.QMessageBox.warning(self, 'EQ', f'Failed to build EQ sidecar: {e}')
+            QtWidgets.QMessageBox.warning(self, 'EQ', f'Failed to prepare EQ settings for device storage: {e}')
             return
 
         ports = self._selected_ports()
@@ -534,6 +534,6 @@ class EqTab(QtWidgets.QWidget):
             return
 
         if res.ok:
-            notify(self, 'EQ coefficients saved + applied')
+            notify(self, 'EQ settings saved and applied')
         else:
-            QtWidgets.QMessageBox.warning(self, 'EQ', f'Completed with write errors: {", ".join(res.failed)}')
+            QtWidgets.QMessageBox.warning(self, 'EQ', f'Completed with some device write errors: {", ".join(res.failed)}')

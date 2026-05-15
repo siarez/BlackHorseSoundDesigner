@@ -803,7 +803,7 @@ class CrossoverTab(QtWidgets.QWidget):
         try:
             lines = ref_path.read_text(encoding='utf-8').splitlines()
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'Crossover', f'Failed to read reference map: {e}')
+            QtWidgets.QMessageBox.critical(self, 'Crossover', f'Failed to load default TAS3251 settings: {e}')
             return
 
         # Helper: quantize to 32-bit words according to TAS formats (standard BQ)
@@ -885,7 +885,7 @@ class CrossoverTab(QtWidgets.QWidget):
 
         # Nothing to send?
         if not items_A and not items_B and not items_D and not items_G:
-            QtWidgets.QMessageBox.warning(self, 'Crossover', 'No crossover/delay/gain map entries found to send')
+            QtWidgets.QMessageBox.warning(self, 'Crossover', 'No crossover settings were found to send.')
             return
 
         writes: list[JournalWrite] = []
@@ -926,7 +926,7 @@ class CrossoverTab(QtWidgets.QWidget):
             xo_state = self.to_state_dict()
             writes.append(JournalWrite(TYPE_APP_STATE, REC_STATE_XO, pack_xo_state(xo_state, int(self._fs)), "STATE XO"))
         except Exception as e:
-            QtWidgets.QMessageBox.warning(self, 'Crossover', f'Failed to build XO sidecar: {e}')
+            QtWidgets.QMessageBox.warning(self, 'Crossover', f'Failed to prepare crossover settings for device storage: {e}')
             return
 
         ports = self._selected_ports()
@@ -941,7 +941,7 @@ class CrossoverTab(QtWidgets.QWidget):
         coeff_failures = [name for name in res.failed if any(lbl in name for lbl in coeff_labels)]
 
         if sent_coeff and not coeff_failures:
-            msg = 'Crossover coefficients saved + applied'
+            msg = 'Crossover settings saved and applied'
             if res.apply_logs:
                 msg += " — " + " | ".join(res.apply_logs)
             notify(self, msg)

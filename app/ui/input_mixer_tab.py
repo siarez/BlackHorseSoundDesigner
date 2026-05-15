@@ -146,7 +146,7 @@ class InputMixerTab(QtWidgets.QWidget):
         # Spacer to push grid up
         # Send button at bottom-left panel for consistency
         self.btn_send = QtWidgets.QPushButton("Send Input Mixer to Device")
-        self.btn_send.setToolTip("Send INPUT MIXER (Q9.23) to TAS3251 via journal")
+        self.btn_send.setToolTip("Send the current input mixer settings to TAS3251 and save them on the device")
         self.btn_send.clicked.connect(self._on_send)
         self.target_selector = DeviceTargetSelector(self)
         self.target_selector.selectionChanged.connect(self._update_send_enabled)
@@ -246,7 +246,7 @@ class InputMixerTab(QtWidgets.QWidget):
         try:
             lines = ref_path.read_text(encoding='utf-8').splitlines()
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'Input Mixer', f'Failed to read reference map: {e}')
+            QtWidgets.QMessageBox.critical(self, 'Input Mixer', f'Failed to load default TAS3251 settings: {e}')
             return
 
         targets = self.values_hex()
@@ -283,7 +283,7 @@ class InputMixerTab(QtWidgets.QWidget):
             items.append((page_i, sub_i, val_u32))
 
         if not items:
-            QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'No INPUT MIXER map entries found to send')
+            QtWidgets.QMessageBox.warning(self, 'Input Mixer', 'No input mixer settings were found to send.')
             return
 
         writes = [
@@ -299,7 +299,7 @@ class InputMixerTab(QtWidgets.QWidget):
             side = pack_q97_values(order, self.to_state_dict())
             writes.append(JournalWrite(TYPE_APP_STATE, REC_STATE_MIXER, side, "STATE MIXER"))
         except Exception as e:
-            QtWidgets.QMessageBox.warning(self, 'Input Mixer', f'Failed to build mixer sidecar: {e}')
+            QtWidgets.QMessageBox.warning(self, 'Input Mixer', f'Failed to prepare input mixer settings for device storage: {e}')
             return
 
         ports = self._selected_ports()
@@ -310,9 +310,9 @@ class InputMixerTab(QtWidgets.QWidget):
             return
 
         if res.ok:
-            msg = 'Input Mixer saved + applied'
+            msg = 'Input Mixer settings saved and applied'
             if res.apply_logs:
                 msg += " — " + " | ".join(res.apply_logs)
             notify(self, msg)
         else:
-            QtWidgets.QMessageBox.warning(self, 'Input Mixer', f'Journal write failed: {", ".join(res.failed)}')
+            QtWidgets.QMessageBox.warning(self, 'Input Mixer', f'Device write failed: {", ".join(res.failed)}')
