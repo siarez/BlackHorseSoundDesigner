@@ -118,6 +118,8 @@ class GeneralTab(QtWidgets.QWidget):
 
         self.btn_program_tas = None
         self.btn_program_es = None
+        self.btn_i2c_scan = None
+        self.btn_init_eeprom = None
         if self._dev_mode:
             # Row 4: Erase EEPROM (Journal)
             self.btn_erase = QtWidgets.QPushButton("Erase EEPROM (Journal)")
@@ -154,6 +156,28 @@ class GeneralTab(QtWidgets.QWidget):
             )
             es_desc.setWordWrap(True)
             grid.addWidget(es_desc, 6, 1, 1, 1)
+
+            self.btn_i2c_scan = QtWidgets.QPushButton("I2C Scan")
+            self.btn_i2c_scan.setToolTip("Scan the selected amp's I2C bus for responding devices.")
+            self.btn_i2c_scan.clicked.connect(self._on_i2c_scan)
+            grid.addWidget(self.btn_i2c_scan, 7, 0, 1, 1)
+
+            i2c_desc = QtWidgets.QLabel(
+                "Developer utility: runs !iscan on the selected amp and shows the responding I2C addresses."
+            )
+            i2c_desc.setWordWrap(True)
+            grid.addWidget(i2c_desc, 7, 1, 1, 1)
+
+            self.btn_init_eeprom = QtWidgets.QPushButton("Init EEPROM")
+            self.btn_init_eeprom.setToolTip("Initialize and probe the selected amp's EEPROM path.")
+            self.btn_init_eeprom.clicked.connect(self._on_init_eeprom)
+            grid.addWidget(self.btn_init_eeprom, 8, 0, 1, 1)
+
+            eeprom_desc = QtWidgets.QLabel(
+                "Developer utility: runs !ei on the selected amp and reports whether the EEPROM responds."
+            )
+            eeprom_desc.setWordWrap(True)
+            grid.addWidget(eeprom_desc, 8, 1, 1, 1)
 
         root.addLayout(grid)
 
@@ -242,6 +266,10 @@ class GeneralTab(QtWidgets.QWidget):
             self.btn_program_tas.setEnabled(has_dev)
         if self.btn_program_es is not None:
             self.btn_program_es.setEnabled(has_dev)
+        if self.btn_i2c_scan is not None:
+            self.btn_i2c_scan.setEnabled(has_dev)
+        if self.btn_init_eeprom is not None:
+            self.btn_init_eeprom.setEnabled(has_dev)
         self.btn_copy_uid.setEnabled(bool(self.edit_uid.text().strip()))
 
         if not d:
@@ -514,6 +542,41 @@ class GeneralTab(QtWidgets.QWidget):
         if button is not None:
             button.setEnabled(True)
 
+    def _run_dev_command(self, title: str, busy_text: str, command: str, button: QtWidgets.QPushButton | None, duration: float = 1.0) -> list[str] | None:
+        uid = self.selected_uid()
+        if not uid:
+            QtWidgets.QMessageBox.warning(self, title, "No target amp selected")
+            return None
+
+        if button is not None:
+            button.setEnabled(False)
+        old_cursor = self.cursor()
+        try:
+            self.setCursor(QtCore.Qt.BusyCursor)
+        except Exception:
+            pass
+        self.lbl_status.setText(busy_text)
+        QtWidgets.QApplication.processEvents()
+
+        def _run(link) -> list[str]:
+            try:
+                link.ser.reset_input_buffer()
+            except Exception:
+                pass
+            link._write_line(command)
+            return link.read_lines(duration)
+
+        try:
+            lines = self._link_mgr.run(_run, uid=uid, auto=False, retry=False)
+        except Exception as e:
+            self.lbl_status.setText(f"{title} failed: {e}")
+            QtWidgets.QMessageBox.warning(self, title, f"Failed: {e}")
+            self._restore_dev_action(old_cursor, button)
+            return None
+
+        self._restore_dev_action(old_cursor, button)
+        return list(lines or [])
+
     def _build_tas_writes(self) -> list[JournalWrite]:
         program_path = self._maps_dir / "shabrang_tas_program_memory.jsonl"
         tuning_path = self._maps_dir / "shabrang_tas_register_tuning.jsonl"
@@ -558,6 +621,51 @@ class GeneralTab(QtWidgets.QWidget):
             writes,
             self.btn_program_es,
         )
+
+    def _on_i2c_scan(self):
+        lines = self._run_dev_command(
+            "I2C Scan",
+            "Scanning I2C bus...",
+            "!iscan",
+            self.btn_i2c_scan,
+            duration=1.5,
+        )
+        if lines is None:
+            return
+
+        addrs = [ln for ln in lines if ln.startswith("I2C ")]
+        ok = any(ln.startswith("OK ISCAN") for ln in lines)
+        self.lbl_status.setText(
+            f"I2C scan completed: {len(addrs)} device(s) found." if ok else "I2C scan did not complete cleanly."
+        )
+
+        body = "\n".join(addrs) if addrs else "No I2C devices responded."
+        if ok:
+            QtWidgets.QMessageBox.information(self, "I2C Scan", body)
+        else:
+            extra = "\n".join(lines) if lines else "No response."
+            QtWidgets.QMessageBox.warning(self, "I2C Scan", body + "\n\n" + extra)
+
+    def _on_init_eeprom(self):
+        lines = self._run_dev_command(
+            "Init EEPROM",
+            "Initializing EEPROM...",
+            "!ei",
+            self.btn_init_eeprom,
+            duration=1.0,
+        )
+        if lines is None:
+            return
+
+        ok = any(ln.startswith("OK EI") for ln in lines)
+        if ok:
+            self.lbl_status.setText("EEPROM init completed.")
+            QtWidgets.QMessageBox.information(self, "Init EEPROM", "EEPROM responded successfully.")
+            return
+
+        self.lbl_status.setText("EEPROM init failed.")
+        detail = "\n".join(lines) if lines else "No response."
+        QtWidgets.QMessageBox.warning(self, "Init EEPROM", f"EEPROM did not respond as expected.\n\n{detail}")
 
     def _on_factory_reset(self):
         uid = self.selected_uid()

@@ -26,8 +26,9 @@ from ..device_interface.state_sidecar import pack_eq_state
 
 
 class EqTab(QtWidgets.QWidget):
-    def __init__(self, parent: QtWidgets.QWidget | None = None):
+    def __init__(self, parent: QtWidgets.QWidget | None = None, dev_mode: bool = False):
         super().__init__(parent)
+        self._dev_mode = bool(dev_mode)
         self._writer = get_device_write_manager()
         self._target_devices: list[dict[str, str]] = []
         # Show 14 user-configurable biquads; BQ15 is reserved for Stage Gain (computed only)
@@ -52,6 +53,11 @@ class EqTab(QtWidgets.QWidget):
         self.target_selector = DeviceTargetSelector(self)
         self.target_selector.selectionChanged.connect(self._update_send_enabled)
         vleft.addWidget(self.target_selector)
+        if self._dev_mode:
+            self.btn_send_eq_x10 = QtWidgets.QPushButton("Send EQ to Device x10")
+            self.btn_send_eq_x10.setToolTip("Send current EQ settings to the selected device 10 times")
+            self.btn_send_eq_x10.clicked.connect(self._on_send_eq_x10)
+            vleft.addWidget(self.btn_send_eq_x10)
         vleft.addWidget(self.btn_send_eq)
         root.addWidget(left, 0)
 
@@ -98,12 +104,16 @@ class EqTab(QtWidgets.QWidget):
         return out
 
     def _update_send_enabled(self):
+        enabled = False
         if not self._target_devices:
-            self.btn_send_eq.setEnabled(False)
+            enabled = False
         elif self.target_selector.isVisible():
-            self.btn_send_eq.setEnabled(self.target_selector.has_selection())
+            enabled = self.target_selector.has_selection()
         else:
-            self.btn_send_eq.setEnabled(True)
+            enabled = True
+        self.btn_send_eq.setEnabled(enabled)
+        if self._dev_mode and hasattr(self, "btn_send_eq_x10"):
+            self.btn_send_eq_x10.setEnabled(enabled)
 
     def set_fs(self, fs: float):
         if abs(fs - getattr(self, '_fs', 48000.0)) > 1e-9:
@@ -408,7 +418,7 @@ class EqTab(QtWidgets.QWidget):
         self.curve_cascade.setData(self._freqs, acc_db)
         self._refresh_selected_coeffs()
 
-    def _on_send_eq(self):
+    def _build_eq_writes(self) -> list[JournalWrite]:
         # Compute hardware-mapped EQ sections (14) and stage gain (BQ15)
         n = self.table.rowCount()
         eq_sections = []
@@ -435,8 +445,7 @@ class EqTab(QtWidgets.QWidget):
         try:
             lines = ref_path.read_text(encoding='utf-8').splitlines()
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'EQ', f'Failed to load default TAS3251 settings: {e}')
-            return
+            raise RuntimeError(f'Failed to load default TAS3251 settings: {e}') from e
 
         # Helper: quantize to 32-bit words according to TAS formats
         def _u32_from(tag: str, vals: tuple[float,float,float,float,float], stage: bool) -> int:
@@ -523,7 +532,14 @@ class EqTab(QtWidgets.QWidget):
             side = pack_eq_state(self.to_state_dict(), int(self._fs))
             writes.append(JournalWrite(TYPE_APP_STATE, REC_STATE_EQ, side, "STATE EQ"))
         except Exception as e:
-            QtWidgets.QMessageBox.warning(self, 'EQ', f'Failed to prepare EQ settings for device storage: {e}')
+            raise RuntimeError(f'Failed to prepare EQ settings for device storage: {e}') from e
+        return writes
+
+    def _on_send_eq(self):
+        try:
+            writes = self._build_eq_writes()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'EQ', str(e))
             return
 
         ports = self._selected_ports()
@@ -537,3 +553,26 @@ class EqTab(QtWidgets.QWidget):
             notify(self, 'EQ settings saved and applied')
         else:
             QtWidgets.QMessageBox.warning(self, 'EQ', f'Completed with some device write errors: {", ".join(res.failed)}')
+
+    def _on_send_eq_x10(self):
+        try:
+            writes = self._build_eq_writes()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, 'EQ', str(e))
+            return
+
+        ports = self._selected_ports()
+        failed: list[str] = []
+        for _ in range(10):
+            try:
+                res = self._writer.apply(writes, ports=ports, auto=not bool(ports))
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, 'EQ', f'Failed to write device: {e}')
+                return
+            if not res.ok:
+                failed.extend(res.failed)
+
+        if failed:
+            QtWidgets.QMessageBox.warning(self, 'EQ', f'Completed with some device write errors: {", ".join(failed)}')
+        else:
+            notify(self, 'EQ settings sent to device 10 times')

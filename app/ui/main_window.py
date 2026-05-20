@@ -90,7 +90,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mixer_tab = InputMixerTab(tabs)
         tabs.addTab(self.mixer_tab, "Input Mixer")
 
-        self.eq_tab = EqTab(tabs)
+        self.eq_tab = EqTab(tabs, dev_mode=self._dev_mode)
         tabs.addTab(self.eq_tab, "EQ")
 
         self.xo_tab = CrossoverTab(tabs)

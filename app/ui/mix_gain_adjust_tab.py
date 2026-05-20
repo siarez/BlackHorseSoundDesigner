@@ -26,8 +26,8 @@ class MixGainAdjustTab(QtWidgets.QWidget):
     NAMES: dict[str, float] = {
         "LefttoSub": 0.0,
         "RighttoSub": 0.0,
-        "SubMixScratchL": 1.0,
-        "SubMixScratchR": 0.0,
+        "SubMixScratchL": 0.0,
+        "SubMixScratchR": 1.0,
         "BassMonoLeft": 1.0,
         "BassMonoRight": 0.0,
         "BassMonoSub": 0.0,
