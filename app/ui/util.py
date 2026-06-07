@@ -3,12 +3,52 @@ from PySide6 import QtWidgets, QtGui, QtCore
 import pyqtgraph as pg
 import math
 
-# Shared width for left-side control/readout panes across tabs.
+# Shared width for larger left-side control/readout panes across tabs.
 LEFT_SIDEBAR_WIDTH = 260
+
+# Narrower readout pane used by Input Mixer / EQ / Crossover coefficient panels.
+READOUT_SIDEBAR_WIDTH = 174
+
+
+def _forward_wheel_to_scroll_parent(widget: QtWidgets.QWidget, event: QtGui.QWheelEvent):
+    parent = widget.parentWidget()
+    while parent is not None:
+        if isinstance(parent, QtWidgets.QAbstractScrollArea):
+            px = event.pixelDelta()
+            ang = event.angleDelta()
+            use_vertical = abs(ang.y()) >= abs(ang.x())
+            bar = parent.verticalScrollBar() if use_vertical else parent.horizontalScrollBar()
+            delta = px.y() if use_vertical else px.x()
+            if delta == 0:
+                delta = ang.y() if use_vertical else ang.x()
+                if delta != 0:
+                    delta = int(delta / 8)
+            if bar is not None and delta != 0:
+                bar.setValue(bar.value() - delta)
+                event.accept()
+                return
+            break
+        parent = parent.parentWidget()
+    event.ignore()
+
+
+class NoWheelDoubleSpinBox(QtWidgets.QDoubleSpinBox):
+    def wheelEvent(self, event: QtGui.QWheelEvent):
+        _forward_wheel_to_scroll_parent(self, event)
+
+
+class NoWheelSpinBox(QtWidgets.QSpinBox):
+    def wheelEvent(self, event: QtGui.QWheelEvent):
+        _forward_wheel_to_scroll_parent(self, event)
+
+
+class NoWheelComboBox(QtWidgets.QComboBox):
+    def wheelEvent(self, event: QtGui.QWheelEvent):
+        _forward_wheel_to_scroll_parent(self, event)
 
 
 def mk_dspin(lo, hi, val, step, suffix, decimals) -> QtWidgets.QDoubleSpinBox:
-    s = QtWidgets.QDoubleSpinBox()
+    s = NoWheelDoubleSpinBox()
     s.setRange(lo, hi)
     s.setValue(val)
     s.setSingleStep(step)

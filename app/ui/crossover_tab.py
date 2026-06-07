@@ -10,7 +10,10 @@ from app.eqcore import (
     sos_response_complex, cascade_response_complex,
     design_first_order_lpf, design_first_order_hpf,
 )
-from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify, LEFT_SIDEBAR_WIDTH
+from .util import (
+    mk_dspin, row_color, build_plot, q_to_hex_twos, notify, READOUT_SIDEBAR_WIDTH,
+    NoWheelComboBox, NoWheelDoubleSpinBox, NoWheelSpinBox,
+)
 from .device_target_selector import DeviceTargetSelector
 from ..device_interface.device_write_manager import (
     JournalWrite,
@@ -48,7 +51,7 @@ class CrossoverTab(QtWidgets.QWidget):
 
         # Left pane: coefficients readouts
         left = QtWidgets.QWidget()
-        left.setFixedWidth(LEFT_SIDEBAR_WIDTH)
+        left.setFixedWidth(READOUT_SIDEBAR_WIDTH)
         left_v = QtWidgets.QVBoxLayout(left)
         left_v.setContentsMargins(0, 0, 0, 0)
         left_v.setSpacing(6)
@@ -166,7 +169,7 @@ class CrossoverTab(QtWidgets.QWidget):
         lbl_a = QtWidgets.QLabel("Delay:")
         lbl_a.setFixedWidth(self._output_label_width)
         row_ad_h.addWidget(lbl_a)
-        self.spin_delay_A = QtWidgets.QSpinBox()
+        self.spin_delay_A = NoWheelSpinBox()
         self.spin_delay_A.setRange(0, 16)
         self.spin_delay_A.setValue(0)
         self.spin_delay_A.setSuffix(" samples")
@@ -187,7 +190,7 @@ class CrossoverTab(QtWidgets.QWidget):
         lbl_gain_a = QtWidgets.QLabel("Gain:")
         lbl_gain_a.setFixedWidth(self._output_label_width)
         row_ag_h.addWidget(lbl_gain_a)
-        self.spin_gain_A = QtWidgets.QDoubleSpinBox()
+        self.spin_gain_A = NoWheelDoubleSpinBox()
         self.spin_gain_A.setRange(-20.0, 20.0)
         self.spin_gain_A.setDecimals(2)
         self.spin_gain_A.setSingleStep(0.50)
@@ -249,7 +252,7 @@ class CrossoverTab(QtWidgets.QWidget):
         lbl_b = QtWidgets.QLabel("Delay:")
         lbl_b.setFixedWidth(self._output_label_width)
         row_bd_h.addWidget(lbl_b)
-        self.spin_delay_B = QtWidgets.QSpinBox()
+        self.spin_delay_B = NoWheelSpinBox()
         self.spin_delay_B.setRange(0, 16)
         self.spin_delay_B.setValue(0)
         self.spin_delay_B.setSuffix(" samples")
@@ -270,7 +273,7 @@ class CrossoverTab(QtWidgets.QWidget):
         lbl_gain_b = QtWidgets.QLabel("Gain:")
         lbl_gain_b.setFixedWidth(self._output_label_width)
         row_bg_h.addWidget(lbl_gain_b)
-        self.spin_gain_B = QtWidgets.QDoubleSpinBox()
+        self.spin_gain_B = NoWheelDoubleSpinBox()
         self.spin_gain_B.setRange(-20.0, 20.0)
         self.spin_gain_B.setDecimals(2)
         self.spin_gain_B.setSingleStep(0.50)
@@ -490,7 +493,7 @@ class CrossoverTab(QtWidgets.QWidget):
         table.setItem(row, 0, num_item)
 
         # Mode
-        cb_mode = QtWidgets.QComboBox()
+        cb_mode = NoWheelComboBox()
         cb_mode.addItems([
             "All-pass",
             "Phase shift 1st",
@@ -505,7 +508,7 @@ class CrossoverTab(QtWidgets.QWidget):
         table.setCellWidget(row, 1, cb_mode)
 
         # Topology (immediately after Mode)
-        cb_topo = QtWidgets.QComboBox()
+        cb_topo = NoWheelComboBox()
         cb_topo.addItems(["Butterworth 1st", "Butterworth 2nd", "Bessel", "Chebyshev I", "Variable Q 2nd"])  # For LPF/HPF; ignored for Peaking/All-pass
         cb_topo.currentIndexChanged.connect(lambda _=None, t=table, r=row: (self._update_xo_row_enabled(t, r), self._update_xo_plots()))
         table.setCellWidget(row, 2, cb_topo)

@@ -2,7 +2,7 @@ from __future__ import annotations
 from PySide6 import QtWidgets, QtCore, QtGui
 import math
 
-from .util import mk_dspin, q_to_hex_twos, notify, LEFT_SIDEBAR_WIDTH
+from .util import mk_dspin, q_to_hex_twos, notify, READOUT_SIDEBAR_WIDTH
 from .device_target_selector import DeviceTargetSelector
 from ..device_interface.device_write_manager import (
     JournalWrite,
@@ -37,7 +37,7 @@ class InputMixerTab(QtWidgets.QWidget):
 
         # Left: hex readout
         left = QtWidgets.QWidget()
-        left.setFixedWidth(LEFT_SIDEBAR_WIDTH)
+        left.setFixedWidth(READOUT_SIDEBAR_WIDTH)
         vleft = QtWidgets.QVBoxLayout(left)
         vleft.setContentsMargins(0, 0, 0, 0)
         vleft.setSpacing(6)

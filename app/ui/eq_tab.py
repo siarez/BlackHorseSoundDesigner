@@ -9,7 +9,10 @@ from app.eqcore import (
     FilterType, BiquadParams, design_biquad,
     default_freq_grid, sos_response_db
 )
-from .util import mk_dspin, row_color, build_plot, q_to_hex_twos, notify, LEFT_SIDEBAR_WIDTH
+from .util import (
+    mk_dspin, row_color, build_plot, q_to_hex_twos, notify, READOUT_SIDEBAR_WIDTH,
+    NoWheelComboBox,
+)
 from .device_target_selector import DeviceTargetSelector
 from ..device_interface.device_write_manager import (
     JournalWrite,
@@ -40,7 +43,7 @@ class EqTab(QtWidgets.QWidget):
 
         # Left: coefficients readout
         left = QtWidgets.QWidget()
-        left.setFixedWidth(LEFT_SIDEBAR_WIDTH)
+        left.setFixedWidth(READOUT_SIDEBAR_WIDTH)
         vleft = QtWidgets.QVBoxLayout(left)
         vleft.setContentsMargins(0, 0, 0, 0)
         vleft.setSpacing(0)
@@ -251,7 +254,7 @@ class EqTab(QtWidgets.QWidget):
         self.table.setItem(row, 0, num_item)
 
         # Type
-        cb = QtWidgets.QComboBox()
+        cb = NoWheelComboBox()
         for t in FilterType:
             cb.addItem(t.value, t)
         cb.setCurrentIndex(list(FilterType).index(typ))
