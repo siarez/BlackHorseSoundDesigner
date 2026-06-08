@@ -4,8 +4,14 @@ from PySide6 import QtWidgets, QtCore, QtGui
 from pathlib import Path
 
 from ..device_interface.device_link_manager import get_device_link_manager
-from ..device_interface.device_write_manager import get_device_write_manager, JournalWrite
-from ..device_interface.record_ids import TYPE_APP_STATE, TYPE_TAS_CONFIG, REC_STATE_BOARD_NAME
+from ..device_interface.device_write_manager import get_device_write_manager, JournalWrite, build_i2c32_payload
+from ..device_interface.record_ids import (
+    TYPE_APP_STATE,
+    TYPE_COEFF,
+    TYPE_TAS_CONFIG,
+    REC_MIX_GAIN,
+    REC_STATE_BOARD_NAME,
+)
 from ..device_interface.program_tas3251 import load_simple_regs, build_payload_tas3251
 from ..device_interface.program_es9821 import load_es9821_pairs, build_payload_es9821
 from ..device_interface.state_sidecar import pack_board_name, sanitize_board_name
@@ -596,6 +602,23 @@ class GeneralTab(QtWidgets.QWidget):
         payload = build_payload_es9821(load_es9821_pairs(map_path), i2c_addr_7bit=0x20)
         return [JournalWrite(0x21, 0x00, payload, "ES9821 MINIMAL")]
 
+    def _build_default_mix_gain_writes(self) -> list[JournalWrite]:
+        # Correct default routing: SubMixScratchR and BassMonoLeft are unity;
+        # all other MIX/GAIN ADJUST coefficients are zero.
+        unity_q923 = 0x00800000
+        items = [
+            (0x1D, 0x6C, 0x00000000),  # LefttoSub
+            (0x1D, 0x70, 0x00000000),  # RighttoSub
+            (0x1D, 0x74, 0x00000000),  # SubMixScratchL
+            (0x1D, 0x78, unity_q923),  # SubMixScratchR
+            (0x1D, 0x7C, unity_q923),  # BassMonoLeft
+            (0x1E, 0x08, 0x00000000),  # BassMonoRight
+            (0x1E, 0x0C, 0x00000000),  # BassMonoSub
+        ]
+        return [
+            JournalWrite(TYPE_COEFF, REC_MIX_GAIN, build_i2c32_payload(items), "MIX/GAIN ADJUST"),
+        ]
+
     def _on_program_tas(self):
         try:
             writes = self._build_tas_writes()
@@ -704,7 +727,11 @@ class GeneralTab(QtWidgets.QWidget):
         self.lbl_status.setText("Factory reset: programming default maps...")
         QtWidgets.QApplication.processEvents()
         try:
-            writes = self._build_tas_writes() + self._build_es9821_minimal_writes()
+            writes = (
+                self._build_tas_writes()
+                + self._build_es9821_minimal_writes()
+                + self._build_default_mix_gain_writes()
+            )
             res = self._writer.apply(writes, uid=uid, auto=False, retry=True)
         except Exception as e:
             self.lbl_status.setText(f"Factory reset failed: {e}")
