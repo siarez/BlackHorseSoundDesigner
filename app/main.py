@@ -47,9 +47,9 @@ def main():
     app = QApplication(qt_argv)
     # Use a uniform, cross‑platform style across OSes
     app.setStyle(QStyleFactory.create("Fusion"))
-    # Apply theme (default light). Allow override via env QT_THEME=dark|light
+    # Apply theme (default dark). Allow override via env QT_THEME=dark|light.
     theme_env = os.environ.get('QT_THEME', '').strip().lower()
-    theme = Theme.DARK if theme_env == 'dark' else Theme.LIGHT
+    theme = Theme.LIGHT if theme_env == 'light' else Theme.DARK
     apply_palette(app, theme)
     icon_path = _find_app_icon()
     if icon_path is not None:
