@@ -36,7 +36,7 @@ if (-not $iscc) {
     throw "Inno Setup compiler (iscc) not found. Install Inno Setup and ensure iscc is in PATH."
 }
 
-$version = "0.1.0"
+$version = "0.1.1"
 $pyproject = Join-Path $RepoRoot "pyproject.toml"
 if (Test-Path $pyproject) {
     $content = Get-Content $pyproject -Raw

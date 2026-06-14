@@ -64,7 +64,7 @@ class InputMixerTab(QtWidgets.QWidget):
         help_html = (
             "<div style='line-height: 140%;'>"
             "Set the 2×2 mix matrix in signed Q9.23 (≈ −256 to +255.999999).<br>"
-            "Identity mix: In1‑to‑A = 1.0, In2‑to‑B = 1.0, others = 0.0.<br>"
+            "Default 2-way routing: In1 feeds both A and B; In2 is muted.<br>"
             "A out = (In1 × In1‑to‑A) + (In2 × In2‑to‑A)<br>"
             "B out = (In1 × In1‑to‑B) + (In2 × In2‑to‑B)"
             "</div>"
@@ -109,7 +109,7 @@ class InputMixerTab(QtWidgets.QWidget):
         self.spin_In1_to_A = spin(1.0)
         grid.addWidget(self.spin_In1_to_A, row, 1)
         grid.addWidget(QtWidgets.QLabel("+ In2 ×"), row, 2)
-        self.spin_In2_to_A = spin(1.0)
+        self.spin_In2_to_A = spin(0.0)
         grid.addWidget(self.spin_In2_to_A, row, 3)
 
         row += 1
@@ -117,7 +117,7 @@ class InputMixerTab(QtWidgets.QWidget):
         self.spin_In1_to_B = spin(1.0)
         grid.addWidget(self.spin_In1_to_B, row, 1)
         grid.addWidget(QtWidgets.QLabel("+ In2 ×"), row, 2)
-        self.spin_In2_to_B = spin(1.0)
+        self.spin_In2_to_B = spin(0.0)
         grid.addWidget(self.spin_In2_to_B, row, 3)
 
         # dB matrix below controls

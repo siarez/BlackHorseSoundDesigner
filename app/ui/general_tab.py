@@ -9,12 +9,15 @@ from ..device_interface.record_ids import (
     TYPE_APP_STATE,
     TYPE_COEFF,
     TYPE_TAS_CONFIG,
+    REC_INPUT_MIXER,
     REC_MIX_GAIN,
+    REC_OUT_GAINS,
     REC_STATE_BOARD_NAME,
+    REC_STATE_MIXER,
 )
 from ..device_interface.program_tas3251 import load_simple_regs, build_payload_tas3251
 from ..device_interface.program_es9821 import load_es9821_pairs, build_payload_es9821
-from ..device_interface.state_sidecar import pack_board_name, sanitize_board_name
+from ..device_interface.state_sidecar import pack_board_name, pack_q97_values, sanitize_board_name
 from .util import notify
 
 
@@ -619,6 +622,38 @@ class GeneralTab(QtWidgets.QWidget):
             JournalWrite(TYPE_COEFF, REC_MIX_GAIN, build_i2c32_payload(items), "MIX/GAIN ADJUST"),
         ]
 
+    def _build_default_input_mixer_writes(self) -> list[JournalWrite]:
+        # Default 2-way routing: Input 1 feeds both outputs and Input 2 is muted.
+        unity_q923 = 0x00800000
+        values = {
+            "LefttoLeft": 1.0,
+            "RighttoLeft": 0.0,
+            "LefttoRight": 1.0,
+            "RighttoRight": 0.0,
+        }
+        items = [
+            (0x1D, 0x5C, unity_q923),  # In1 to A
+            (0x1D, 0x60, 0x00000000),  # In2 to A
+            (0x1D, 0x64, unity_q923),  # In1 to B
+            (0x1D, 0x68, 0x00000000),  # In2 to B
+        ]
+        state_order = ["LefttoLeft", "RighttoLeft", "LefttoRight", "RighttoRight"]
+        return [
+            JournalWrite(TYPE_COEFF, REC_INPUT_MIXER, build_i2c32_payload(items), "INPUT MIXER"),
+            JournalWrite(TYPE_APP_STATE, REC_STATE_MIXER, pack_q97_values(state_order, values), "STATE MIXER"),
+        ]
+
+    def _build_default_output_gain_writes(self) -> list[JournalWrite]:
+        # Route process-flow Channel A to the left DAC and Channel B/Sub to the right DAC.
+        unity_q923 = 0x00800000
+        items = [
+            (0x1E, 0x2C, unity_q923),  # AnalogLeftfromLeft
+            (0x1E, 0x40, unity_q923),  # AnalogRightfromSub
+        ]
+        return [
+            JournalWrite(TYPE_COEFF, REC_OUT_GAINS, build_i2c32_payload(items), "OUTPUT CROSS BAR"),
+        ]
+
     def _on_program_tas(self):
         try:
             writes = self._build_tas_writes()
@@ -731,6 +766,8 @@ class GeneralTab(QtWidgets.QWidget):
                 self._build_tas_writes()
                 + self._build_es9821_minimal_writes()
                 + self._build_default_mix_gain_writes()
+                + self._build_default_input_mixer_writes()
+                + self._build_default_output_gain_writes()
             )
             res = self._writer.apply(writes, uid=uid, auto=False, retry=True)
         except Exception as e:

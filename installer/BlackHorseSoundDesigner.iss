@@ -1,6 +1,6 @@
 #define MyAppName "Black Horse Sound Designer"
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.0"
+  #define MyAppVersion "0.1.1"
 #endif
 #define MyAppPublisher "Black Horse Audio"
 #define MyAppExeName "BlackHorseSoundDesigner.exe"
